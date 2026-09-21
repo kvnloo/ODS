@@ -114,3 +114,18 @@ test('ordinary follow-ups preserve the pending GitHub request without creating a
   expect(view.result.current.state.state).toBe('researching')
   view.unmount()
 })
+
+
+test('a lost creation acknowledgement preserves the scope and resume reads the same request', async () => {
+  const fetcher = vi.fn().mockRejectedValueOnce(new Error('Connection lost'))
+    .mockResolvedValue(response(receipt))
+  vi.stubGlobal('fetch', fetcher)
+  const view = renderHook(() => useGithubExtensionRequest('chat'))
+  await act(async () => view.result.current.start(command, identity))
+  expect(view.result.current.state.state).toBe('reconciliation_required')
+  expect(fetcher).toHaveBeenCalledTimes(1)
+  await act(async () => view.result.current.resume())
+  expect(JSON.parse(fetcher.mock.calls[1][1].body)).toEqual({ action: 'read', ...identity })
+  expect(fetcher.mock.calls.some(([, options]) => JSON.parse(options.body).action === 'cancel')).toBe(false)
+  view.unmount()
+})

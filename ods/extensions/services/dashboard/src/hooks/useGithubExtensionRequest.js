@@ -122,8 +122,10 @@ export default function useGithubExtensionRequest(chatId) {
     }
     const failed = () => {
       if (current.current === run) {
-        stop()
-        setState({ target: run.target, command, state: 'reconciliation_required' })
+        // A timeout is not cancellation. Keep the original durable scope so
+        // readback can recover an accepted proposal or host operation.
+        run.busy = false
+        setState({ target: run.target, command, requestId: run.requestId, chatId: run.chatId, state: 'reconciliation_required' })
       }
     }
     const execute = async receipt => {

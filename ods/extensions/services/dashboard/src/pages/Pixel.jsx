@@ -1562,9 +1562,10 @@ export default function Pixel({ systemStatus = null }) {
               {message.role === 'assistant' && <PortalAgentActivity task={message.task} active={message.status === 'streaming'} status={message.status}/> }
               {message.role === 'assistant' && index === messages.length - 1 && messages[index - 1]?.role === 'user' &&
                 <PortalExtensionProgress key={`extension-progress/${chatIdRef.current}/${index}`}
-                  command={messages[index - 1].content} active={message.status === 'streaming'}
-                  installation={githubExtensionInstallation?.command === messages[index - 1].content ? githubExtensionInstallation : extensionInstallation}
-                  onStopInstallation={githubExtensionInstallation?.command === messages[index - 1].content ? stopGithubExtensionInstallation : stopExtensionInstallation}
+                  command={githubExtensionInstallation?.command || messages[index - 1].content} active={message.status === 'streaming'}
+                  installation={githubExtensionInstallation || extensionInstallation}
+                  onRecheckInstallation={githubExtensionInstallation ? resumeGithubExtensionInstallation : undefined}
+                  onStopInstallation={githubExtensionInstallation ? stopGithubExtensionInstallation : stopExtensionInstallation}
                   projectPath={conversationProject({messages, preview})?.path}/>}
               {message.role === 'assistant' && index === messages.length - 1 && integrationRecovery &&
                 <section className="portal-extension-progress" aria-label="Project integration recovery">
@@ -1574,9 +1575,9 @@ export default function Pixel({ systemStatus = null }) {
                 </section>}
               {message.role === 'assistant' && message.status === 'done' && index === messages.length - 1 &&
                 messages[index - 1]?.role === 'user' && <PortalExtensionSetup key={`${chatIdRef.current}/${index}`}
-                  command={messages[index - 1].content} disabled={isDisabled || sending || restoredActive || restoredChecking}
+                  command={githubExtensionInstallation?.command || messages[index - 1].content} disabled={isDisabled || sending || restoredActive || restoredChecking}
                   installation={githubExtensionInstallation}
-                  onConfigured={() => githubExtensionInstallation?.command === messages[index - 1].content
+                  onConfigured={() => githubExtensionInstallation
                     ? resumeGithubExtensionInstallation() : sendMessage(messages[index - 1].content)}/>}
               {message.role === 'assistant' && message.content ? (
                 <>

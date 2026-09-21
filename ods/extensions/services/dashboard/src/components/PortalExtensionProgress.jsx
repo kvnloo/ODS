@@ -6,7 +6,7 @@ import './portal-extension-setup.css'
 const labels = {none: 'Ready', install: 'Waiting to install', enable: 'Waiting to start',
   wait: 'Installing', blocked: 'Needs attention'}
 
-export default function PortalExtensionProgress({command, active = false, projectPath, installation, onStopInstallation}) {
+export default function PortalExtensionProgress({command, active = false, projectPath, installation, onStopInstallation, onRecheckInstallation}) {
   const boundTarget = installation && installation.command === command && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(installation.target || '')
     ? installation.target : undefined
   const target = extensionSetupTarget(command) || boundTarget
@@ -70,7 +70,8 @@ export default function PortalExtensionProgress({command, active = false, projec
   }, [target, active, installing, canAssociate, revision, projectPath, associationProject])
   if (!target && installation?.command === command && installation.state === 'reconciliation_required') {
     return <section className="portal-extension-progress" aria-label="Extension installation progress">
-      <p role="status">The extension recipe could not be confirmed. Review the result before trying again.</p>
+      <p role="status">The extension recipe could not be confirmed. The existing request has been preserved.</p>
+      {onRecheckInstallation && <button type="button" onClick={onRecheckInstallation}>Recheck installation</button>}
     </section>
   }
   if (!target || (!plan && !error)) return null
@@ -85,6 +86,7 @@ export default function PortalExtensionProgress({command, active = false, projec
     </ul>}
     {association && <p>{association}</p>}
     {installState === 'reconciliation_required' && <p role="status">Installation needs inspection before continuing. An accepted operation may still be running.</p>}
+    {installState === 'reconciliation_required' && onRecheckInstallation && <button type="button" onClick={onRecheckInstallation}>Recheck installation</button>}
     {installState === 'blocked' && <p role="status">Installation cannot continue with the current host or extension state.</p>}
     {installing && onStopInstallation && <button type="button" onClick={onStopInstallation}>Stop further installation steps</button>}
     {!active && <button type="button" onClick={() => setRevision(value => value + 1)}>Refresh status</button>}
