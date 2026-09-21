@@ -45,8 +45,8 @@ def model_request_context(command, chat_id, request_id):
         'Use the selected tool schema; describe it if its fields are not already available. '
         'Installing packages in the agent sandbox does not register an ODS extension. '
         'A follow-up message can continue this request, but unrelated chat is not permission '
-        'to advance it. Use pixel_ods_extension_request_status with these original chatId/requestId '
-        'to observe a saved proposal and its managed runtime; this read does not install anything. When preparation is requested, pixel_ods_extension_request_prepare prepares that exact saved recipe using the same IDs, without starting the application. This context does not grant '
+        'to advance it. Call pixel_ods_extension_request_status with no arguments '
+        'to observe a saved proposal and its managed runtime; this read does not install anything. When preparation is requested, pixel_ods_extension_request_prepare resolves and prepares that exact saved recipe from the session, without starting the application. This context does not grant '
         'execution authority: the backend must confirm an active owner request and matching '
         'validated recipe before proceeding. A saved or available recipe is not an installed application.'
     )}
@@ -129,6 +129,27 @@ def active_chat_request(directory, owner, chat_id, *, now=None):
     for path in _directory(directory).glob('*.json'):
         record = _read(path)
         if record.get('ownerDigest') != owner_digest or record.get('chatId') != chat_id:
+            continue
+        receipt = read_request(directory, owner, chat_id, record.get('requestId'), now=now)
+        if receipt['state'] != 'pending':
+            continue
+        if current is not None:
+            raise ValueError('Ambiguous active extension request')
+        current = receipt
+    return current
+
+
+def active_session_request(directory, owner, session_hash, *, now=None):
+    """Resolve a trusted agent session without asking the model for routing IDs."""
+    if not isinstance(session_hash, str) or not re.fullmatch(r'[a-f0-9]{64}', session_hash):
+        raise ValueError('Invalid session identity')
+    owner_digest, _ = _identity(owner, 'lookup', 'lookup')
+    current = None
+    for path in _directory(directory).glob('*.json'):
+        record = _read(path)
+        chat_id = record.get('chatId')
+        if (record.get('ownerDigest') != owner_digest or not isinstance(chat_id, str)
+                or hashlib.sha256(chat_id.encode()).hexdigest() != session_hash):
             continue
         receipt = read_request(directory, owner, chat_id, record.get('requestId'), now=now)
         if receipt['state'] != 'pending':

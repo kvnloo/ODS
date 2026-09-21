@@ -37,6 +37,40 @@ def detail(status: str, *, required: tuple[str, ...] = ()) -> dict[str, object]:
 
 
 class ExtensionManagerTests(unittest.TestCase):
+    def test_session_resolution_validates_binding_and_uses_fixed_endpoint(self):
+        session_hash = hashlib.sha256(b'chat').hexdigest()
+        payload = json.dumps({'schemaVersion':1,'action':'github-request-resolve','sessionHash':session_hash}).encode()
+        value = {'schemaVersion':1,'kind':'ods-extension-request-scope','sessionHash':session_hash,
+                 'request':{'chatId':'chat','requestId':'original'}}
+        with mock.patch.object(manager, '_request_json', return_value=(200,value)) as request:
+            self.assertEqual(manager._resolve_request(self.env_path,3002,payload),value)
+            self.assertEqual(request.call_args.kwargs['path'],'/api/extensions/github/requests/resolve')
+            self.assertEqual(request.call_args.kwargs['body'],{'sessionHash':session_hash})
+        for bad in [{'chatId':'other','requestId':'original'}, {'chatId':'chat','requestId':'../bad'}]:
+            with self.subTest(bad=bad), mock.patch.object(manager, '_request_json',
+                    return_value=(200,{**value,'request':bad})), self.assertRaises(manager.ManagerError):
+                manager._resolve_request(self.env_path,3002,payload)
+        with mock.patch.object(manager, '_request_json', return_value=(200,{**value,'request':None})):
+            self.assertIsNone(manager._resolve_request(self.env_path,3002,payload)['request'])
+
+    def test_session_resolution_crosses_the_http_request_boundary(self):
+        session_hash = hashlib.sha256(b'chat').hexdigest()
+        value = {'schemaVersion':1,'kind':'ods-extension-request-scope',
+                 'sessionHash':session_hash,'request':{'chatId':'chat','requestId':'original'}}
+        response=mock.Mock(status=200)
+        response.headers.get_content_type.return_value='application/json'
+        response.headers.get.return_value=None
+        response.read.return_value=json.dumps(value).encode()
+        connection=mock.Mock()
+        connection.getresponse.return_value=response
+        payload=json.dumps({'schemaVersion':1,'action':'github-request-resolve','sessionHash':session_hash}).encode()
+        with mock.patch.object(manager.http.client,'HTTPConnection',return_value=connection):
+            self.assertEqual(manager._resolve_request(self.env_path,3002,payload),value)
+        sent=connection.request.call_args
+        self.assertEqual(sent.args,('POST','/api/extensions/github/requests/resolve'))
+        self.assertEqual(json.loads(sent.kwargs['body']),{'sessionHash':session_hash})
+        connection.close.assert_called_once()
+
     def test_failed_lookup_does_not_invent_an_uninstalled_state(self):
         for action in ('inspect', 'install', 'enable', 'disable', 'remove'):
             with self.subTest(action=action):

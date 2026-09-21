@@ -281,3 +281,39 @@ def test_followup_recovers_bound_proposal_without_network_research(monkeypatch, 
         'continue', include_evidence=True))
     assert 'could not recover' in result['content']
     inspect.assert_not_awaited()
+
+def test_session_scope_is_owner_bound_and_does_not_revive_requests(tmp_path):
+    import hashlib
+    from extension_requests import active_session_request, cancel_request
+    session_hash = hashlib.sha256(b'chat').hexdigest()
+    create_request(tmp_path, 'owner', 'chat', 'original', COMMAND, now=100)
+    create_request(tmp_path, 'another-owner', 'chat', 'foreign', COMMAND, now=100)
+    assert active_session_request(tmp_path, 'owner', session_hash, now=101)['requestId'] == 'original'
+    assert active_session_request(tmp_path, 'stranger', session_hash, now=101) is None
+    assert active_session_request(tmp_path, 'owner', '0'*64, now=101) is None
+    assert active_session_request(tmp_path, 'owner', session_hash, now=100000) is None
+    cancel_request(tmp_path, 'owner', 'chat', 'original', now=101)
+    assert active_session_request(tmp_path, 'owner', session_hash, now=102) is None
+    with pytest.raises(ValueError):
+        active_session_request(tmp_path, 'owner', '../chat', now=102)
+
+
+def test_session_scope_endpoint_uses_authenticated_owner(monkeypatch, tmp_path):
+    import hashlib
+    import json
+    from starlette.requests import Request
+    from routers import extensions
+    directory = tmp_path / '.extension-requests'; directory.mkdir()
+    create_request(directory, 'owner', 'chat', 'original', COMMAND)
+    monkeypatch.setattr(extensions, '_extensions_lock_path', lambda: tmp_path / '.lock')
+    async def call(owner, payload):
+        async def receive(): return {'type':'http.request','body':json.dumps(payload).encode()}
+        return await extensions.extension_github_request_resolve(
+            Request({'type':'http','method':'POST','headers':[]},receive),api_key=owner)
+    payload={'sessionHash':hashlib.sha256(b'chat').hexdigest()}
+    result=asyncio.run(call('owner',payload))
+    assert result.headers['cache-control']=='no-store'
+    assert json.loads(result.body)['request']=={'chatId':'chat','requestId':'original'}
+    assert json.loads(asyncio.run(call('stranger',payload)).body)['request'] is None
+    with pytest.raises(extensions.HTTPException):
+        asyncio.run(call('owner',{'sessionHash':'bad'}))

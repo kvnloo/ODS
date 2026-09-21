@@ -10,6 +10,31 @@ const args = {chatId: 'chat', requestId: 'turn', candidate: {repository: 'https:
 const receipt = {schemaVersion: 1, kind: 'ods-extension-request-proposal', chatId: 'chat', requestId: 'turn',
   state: 'pending', installationStarted: false, proposal: {draftId: 'b'.repeat(64), recipeDigest: 'c'.repeat(64), extensionId: 'example'}};
 
+for (const [factory, action] of [[createExtensionRequestStatusTool,'status'],
+  [createExtensionRequestPrepareTool,'prepare'], [createExtensionRequestAdvanceTool,'advance']]) {
+  test(`${action} binds empty arguments to the trusted session and rejects foreign scope`, async () => {
+    const sessionHash=createHash('sha256').update('chat').digest('hex');
+    let request={chatId:'chat',requestId:'original'};
+    const calls=[];
+    const tool=factory(context,{submit:async payload=>{
+      calls.push(payload);
+      if(payload.action==='github-request-resolve') return {schemaVersion:1,
+        kind:'ods-extension-request-scope',sessionHash,request};
+      return {}; // Receipt validation remains independent of scope resolution.
+    }});
+    assert.deepEqual(tool.parameters.properties,{});
+    await tool.execute('turn',{});
+    assert.deepEqual(calls,[{schemaVersion:1,action:'github-request-resolve',sessionHash},
+      {schemaVersion:1,action:`github-request-${action}`,chatId:'chat',requestId:'original'}]);
+    for (const invalid of [null,{chatId:'another-chat',requestId:'original'},
+      {chatId:'chat',requestId:'original',extra:true}]) {
+      request=invalid; calls.length=0;
+      assert.equal((await tool.execute('turn',{})).isError,true);
+      assert.equal(calls.length,1,'no downstream operation for absent or invalid scope');
+    }
+  });
+}
+
 test('request status is owner-bound, read-only and never promotes missing evidence to success', async () => {
   const value={schemaVersion:1,kind:'ods-extension-request-status',chatId:'chat',requestId:'turn',
     requestState:'pending',proposalAccepted:true,prepared:false,extensionId:'example',runtimeStatus:'not_observed'};

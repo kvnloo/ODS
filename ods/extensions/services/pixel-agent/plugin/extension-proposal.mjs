@@ -10,22 +10,41 @@ const managerSocket = platform => platform === 'darwin'
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).sort().join() === [...keys].sort().join();
 
+async function resolveRequestIdentity(context, args, submit) {
+  const sessionHash = context.sessionKey.slice(PREFIX.length);
+  // Retain validated legacy calls during migration, but expose no routing
+  // fields to the model. Empty calls resolve from the trusted session only.
+  if (!exact(args, [])) {
+    if (exact(args, ['chatId', 'requestId']) && [args.chatId, args.requestId].every(x => typeof x === 'string' && ID.test(x))
+        && createHash('sha256').update(args.chatId).digest('hex') === sessionHash) return args;
+    throw new Error('Invalid request identity');
+  }
+  const scope = await submit({schemaVersion:1, action:'github-request-resolve', sessionHash});
+  if (!exact(scope, ['schemaVersion','kind','sessionHash','request']) || scope.schemaVersion !== 1
+      || scope.kind !== 'ods-extension-request-scope' || scope.sessionHash !== sessionHash) throw new Error('Unverified scope');
+  if (scope.request === null) return null;
+  const identity = scope.request;
+  if (!exact(identity, ['chatId','requestId']) || ![identity.chatId,identity.requestId].every(x=>typeof x==='string' && ID.test(x))
+      || createHash('sha256').update(identity.chatId).digest('hex') !== sessionHash) throw new Error('Wrong request session');
+  return identity;
+}
+
+const noActiveRequest = () => ({isError:true, content:[{type:'text',text:
+  'There is no active GitHub installation request in this conversation. This does not establish whether an extension is installed. The catalog lookup is available through pixel_ods_extensions. No operation was started.'}]});
+
 // Read managed state through the same session-bound channel as proposals.
 export function createExtensionRequestStatusTool(context, {submit = submitExtensionProposal} = {}) {
   if (context?.agentId !== 'pixel' || typeof context.sessionKey !== 'string'
       || !/^agent:pixel:openai-user:ods-[a-f0-9]{64}$/.test(context.sessionKey)) return null;
   return {
     name:'pixel_ods_extension_request_status', label:'Check extension request',
-    description:'Read the saved GitHub extension request and its observed managed runtime state. Use the original chatId and requestId from routing context, including on follow-up turns. Does not prepare, install, restart or change anything. Proposal acceptance and preparation do not establish installation success; not_observed means unknown. cli_installed establishes the configured CLI verification, not every possible application behavior.',
-    parameters:{type:'object',additionalProperties:false,required:['chatId','requestId'],properties:{
-      chatId:{type:'string',pattern:'^[A-Za-z0-9_-]{1,128}$'},
-      requestId:{type:'string',pattern:'^[A-Za-z0-9_-]{1,128}$'},
-    }},
+    description:'Read the saved GitHub extension request and its observed managed runtime state. The adapter resolves the active request from this conversation; call with no arguments. Does not prepare, install, restart or change anything. Proposal acceptance and preparation do not establish installation success; not_observed means unknown. cli_installed establishes the configured CLI verification, not every possible application behavior.',
+    parameters:{type:'object',additionalProperties:false,properties:{}},
     async execute(_id,args) {
       const unavailable={isError:true,content:[{type:'text',text:'The saved extension request could not be observed. No installation was started; its outcome remains unknown.'}]};
-      if (!exact(args,['chatId','requestId']) || ![args.chatId,args.requestId].every(x=>typeof x==='string' && ID.test(x))
-          || context.sessionKey !== PREFIX+createHash('sha256').update(args.chatId).digest('hex')) return unavailable;
       try {
+        args = await resolveRequestIdentity(context, args, submit);
+        if (!args) return noActiveRequest();
         const value=await submit({schemaVersion:1,action:'github-request-status',...args});
         if (!exact(value,['schemaVersion','kind','chatId','requestId','requestState','proposalAccepted','prepared','extensionId','runtimeStatus'])
             || value.schemaVersion!==1 || value.kind!=='ods-extension-request-status'
@@ -74,15 +93,13 @@ export function createExtensionRequestAdvanceTool(context, {submit = submitExten
   if (!createExtensionRequestStatusTool(context)) return null;
   return {
     name:'pixel_ods_extension_request_advance', label:'Install prepared ODS extension',
-    description:'Advance installation of this conversation’s accepted, prepared GitHub recipe when the owner has requested installation. Supply the original chatId/requestId, including follow-ups. ODS resolves the extension and dependencies from saved state and records the host attempt before dispatch. Repeating this call observes an unresolved attempt instead of duplicating it. pending means still running; succeeded requires host completion and runtime observation. Stop advancing on failed, blocked, configuration_required or reconciliation_required and inspect the reported state. This does not run arbitrary host commands or verify application behavior beyond the recipe checks.',
-    parameters:{type:'object',additionalProperties:false,required:['chatId','requestId'],properties:{
-      chatId:{type:'string',pattern:'^[A-Za-z0-9_-]{1,128}$'}, requestId:{type:'string',pattern:'^[A-Za-z0-9_-]{1,128}$'},
-    }},
+    description:'Advance installation of this conversation’s accepted, prepared GitHub recipe when the owner has requested installation. Call with no arguments; ODS resolves the active request from this conversation, including follow-ups. ODS resolves the extension and dependencies from saved state and records the host attempt before dispatch. Repeating this call observes an unresolved attempt instead of duplicating it. pending means still running; succeeded requires host completion and runtime observation. Stop advancing on failed, blocked, configuration_required or reconciliation_required and inspect the reported state. This does not run arbitrary host commands or verify application behavior beyond the recipe checks.',
+    parameters:{type:'object',additionalProperties:false,properties:{}},
     async execute(_id,args) {
       const unknown={isError:true,content:[{type:'text',text:'Installation outcome is unconfirmed. Inspect this saved request before further action; a host operation may already exist.'}]};
-      if (!exact(args,['chatId','requestId']) || ![args.chatId,args.requestId].every(x=>typeof x==='string' && ID.test(x))
-          || context.sessionKey !== PREFIX+createHash('sha256').update(args.chatId).digest('hex')) return unknown;
       try {
+        args = await resolveRequestIdentity(context, args, submit);
+        if (!args) return noActiveRequest();
         const value=await submit({schemaVersion:1,action:'github-request-advance',...args});
         const service=x=>typeof x==='string' && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(x);
         if (!exact(value,['schemaVersion','kind','chatId','requestId','extensionId','state','activeExtensionId','operationId','dispatched'])
@@ -103,16 +120,13 @@ export function createExtensionRequestPrepareTool(context, {submit = submitExten
   if (!createExtensionRequestStatusTool(context)) return null;
   return {
     name:'pixel_ods_extension_request_prepare', label:'Prepare managed extension recipe',
-    description:'Prepare the accepted GitHub proposal for this conversation in the ODS extension library. Use the original chatId/requestId from request context. Revalidates its exact saved recipe and source revision; repeating preparation recovers the identical package. Does not install dependencies, start containers or prove runtime readiness. Use when the owner requests preparing or installing this integration; research alone does not request preparation.',
-    parameters:{type:'object',additionalProperties:false,required:['chatId','requestId'],properties:{
-      chatId:{type:'string',pattern:'^[A-Za-z0-9_-]{1,128}$'},
-      requestId:{type:'string',pattern:'^[A-Za-z0-9_-]{1,128}$'},
-    }},
+    description:'Prepare the accepted GitHub proposal for this conversation in the ODS extension library. The adapter resolves the active request from this conversation; call with no arguments. Revalidates its exact saved recipe and source revision; repeating preparation recovers the identical package. Does not install dependencies, start containers or prove runtime readiness. Use when the owner requests preparing or installing this integration; research alone does not request preparation.',
+    parameters:{type:'object',additionalProperties:false,properties:{}},
     async execute(_id,args) {
       const unavailable={isError:true,content:[{type:'text',text:'Preparation was not confirmed. Inspect this request with pixel_ods_extension_request_status before continuing; no runtime success is established.'}]};
-      if (!exact(args,['chatId','requestId']) || ![args.chatId,args.requestId].every(x=>typeof x==='string' && ID.test(x))
-          || context.sessionKey !== PREFIX+createHash('sha256').update(args.chatId).digest('hex')) return unavailable;
       try {
+        args = await resolveRequestIdentity(context, args, submit);
+        if (!args) return noActiveRequest();
         const value=await submit({schemaVersion:1,action:'github-request-prepare',...args});
         if (!exact(value,['schemaVersion','kind','chatId','requestId','draftId','extensionId','recipeDigest','state','installationStarted','registered','runtimeVerified'])
             || value.schemaVersion!==1 || value.kind!=='ods-extension-request-preparation'

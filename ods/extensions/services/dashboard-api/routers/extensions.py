@@ -1564,6 +1564,31 @@ async def chat_extension_request_context(owner, chat_id, request_id, command, *,
     return context
 
 
+@router.post("/api/extensions/github/requests/resolve")
+async def extension_github_request_resolve(request: Request, api_key: str = Depends(verify_api_key)):
+    from extension_requests import active_session_request
+    payload = await _github_recipe_payload(request)
+    if (not isinstance(payload, dict) or set(payload) != {'sessionHash'}
+            or not isinstance(payload['sessionHash'], str)
+            or not re.fullmatch(r'[a-f0-9]{64}', payload['sessionHash'])):
+        raise HTTPException(status_code=400, detail='Invalid session request')
+    def resolve():
+        directory = _extensions_lock_path().parent.resolve() / '.extension-requests'
+        if directory.is_symlink():
+            raise ValueError('Invalid request storage')
+        if not directory.exists():
+            return None
+        return active_session_request(directory, api_key, payload['sessionHash'])
+    try:
+        current = await asyncio.to_thread(resolve)
+    except (ValueError, OSError, KeyError, TypeError):
+        raise HTTPException(status_code=409, detail='Request scope unavailable')
+    return JSONResponse({'schemaVersion': 1, 'kind': 'ods-extension-request-scope',
+        'sessionHash': payload['sessionHash'],
+        'request': ({key: current[key] for key in ('chatId', 'requestId')} if current else None)},
+        headers={'Cache-Control': 'no-store'})
+
+
 @router.post("/api/extensions/github/requests")
 async def extension_github_request(request: Request, api_key: str = Depends(verify_api_key)):
     from extension_requests import create_request, read_request, cancel_request
