@@ -42,6 +42,13 @@ import {
 } from "./tool-loop-guard.mjs";
 import { withPixelCronDeliveryDefault } from "./cron-delivery-default.mjs";
 import { createPublicWebExtractTool } from "./web-extract.mjs";
+import { createExtensionRepositoryContext } from './extension-repository-context.mjs';
+
+const extensionRepositoryContext = createExtensionRepositoryContext({
+  tool: createPublicWebExtractTool({
+    guardedFetch: fetchWithWebToolsNetworkGuard, readResponseText, extractBasicHtmlContent,
+  }),
+});
 import { createPerplexicaResearchTool } from "./perplexica-research.mjs";
 import { createDownloadPromoteTool } from "./download-promote.mjs";
 import {
@@ -275,7 +282,7 @@ export default definePluginEntry({
     // OpenClaw does not replay arbitrary plugin tools after an empty model
     // continuation. Give the Pixel agent an explicit, trusted prompt contract
     // so every ODS lookup is followed by a user-visible answer.
-    api.on("before_prompt_build", (event, context) => {
+    api.on("before_prompt_build", async (event, context) => {
       const privateBrowserAccess = privateBrowserAccessForAgent(api.config, AGENT_ID);
       const workspaceRoot = api.config?.agents?.list?.find(agent => agent.id === AGENT_ID)?.workspace
         ?? api.config?.agents?.defaults?.workspace;
@@ -287,7 +294,9 @@ export default definePluginEntry({
         configuredLeanPrompt,
         privateBrowserAccess,
       });
-      return contract ? { ...contract, ...(goalProgress.active(context?.runId ?? event?.runId) ? {appendContext:GOAL_CONTRACT} : {}), appendSystemContext: `${ACTIVITY_CONTRACT} ${goalProgress.active(context?.runId ?? event?.runId) ? GOAL_CONTRACT : ""} ${contract.appendSystemContext} ${executionContext()}` } : undefined;
+      const repositoryEvidence = contract ? await extensionRepositoryContext(event,
+        result => toolLoopGuard.observeRepositorySource(context?.runId ?? event?.runId, result)) : '';
+      return contract ? { ...contract, ...(goalProgress.active(context?.runId ?? event?.runId) ? {appendContext:GOAL_CONTRACT} : {}), appendSystemContext: `${ACTIVITY_CONTRACT} ${goalProgress.active(context?.runId ?? event?.runId) ? GOAL_CONTRACT : ""} ${contract.appendSystemContext} ${executionContext()} ${repositoryEvidence}` } : undefined;
     });
     api.on("model_call_started", (event, context) =>
       toolLoopGuard.observeModelCall(event, context, AGENT_ID)

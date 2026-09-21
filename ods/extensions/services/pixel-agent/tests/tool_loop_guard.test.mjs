@@ -8373,6 +8373,22 @@ test("canonical source matching rejects unrelated repositories and origins", () 
   for (const source of ["http://github.com/Osmantic/ODS", "https://user:secret@github.com/Osmantic/ODS", "https://github.com:444/Osmantic/ODS", "https://github.com.evil.example/Osmantic/ODS", "https://github.com/Osmantic/ODS-other", "https://raw.githubusercontent.com/other/ODS/main/README.md", "https://api.github.com/users/Osmantic/ODS", "https://github.com/Osmantic%2FODS", "not a URL"]) assert.equal(canonicalGitHubSourceMatches(source, repository), false, source);
 });
 
+test('repository pre-read evidence is scoped to the requested repository and run', () => {
+  for (const variant of ['valid','other','failed','missing-evidence','unknown-run']) {
+    const guard=createToolLoopGuard();
+    guard.observeRun({agentId:'pixel',runId:'run-1',sessionId:'session-1'},'pixel',{
+      prompt:'/extensions https://github.com/NandhaKishorM/laya analyze only',
+    });
+    guard.observeRepositorySource(variant==='unknown-run'?'other-run':'run-1', {
+      isError:variant==='failed',
+      details:{boundary:'public-web-read-only',source_url:variant==='other'
+        ?'https://github.com/layabox/LayaAir':'https://raw.githubusercontent.com/NandhaKishorM/laya/HEAD/README.md'},
+      content:variant==='missing-evidence'?[]:[{type:'text',text:'<<<EXTERNAL_UNTRUSTED_CONTENT>>> actual README'}],
+    });
+    assert.equal(guard.verificationForRun('run-1').status,variant==='valid'?'none':'failed');
+  }
+});
+
 test("counts targeted public extraction as a bounded fetch", () => {
   const guard = createToolLoopGuard({ limits: { search: 1, fetch: 1, total: 2 } });
   assert.equal(call(guard, "web_search"), undefined);

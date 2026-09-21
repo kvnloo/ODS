@@ -10080,6 +10080,14 @@ export function createToolLoopGuard({
 
   return {
     beforeToolCall,
+    observeRepositorySource(runId, result) {
+      const state = runs.get(runId);
+      if (!state?.githubCanonicalUrl || result?.isError ||
+          result?.details?.boundary !== 'public-web-read-only' ||
+          !canonicalGitHubSourceMatches(result.details.source_url, state.githubCanonicalUrl) ||
+          !result.content?.some(part => part?.type === 'text' && part.text?.includes('EXTERNAL_UNTRUSTED_CONTENT'))) return;
+      state.githubCanonicalSatisfied = true;
+    },
     afterToolCall,
     toolResultPersist,
     beforeAgentFinalize,
