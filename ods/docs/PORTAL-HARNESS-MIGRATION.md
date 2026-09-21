@@ -370,3 +370,28 @@ CSV test passed; it does not qualify arbitrary repositories or all CSV semantics
 PR #6156 checks at predecessor a3698647 passed, including integration-smoke run
 35668332362/job 106558927176. These CI checks do not substitute for live cross-platform
 agent and managed-installation qualification.
+
+### Workspace inspection preserves the selected tool's effects
+
+Removed the workspace adapter that changed `read`, `process list`, malformed `exec`,
+unknown `ls` IDs and ODS metadata requests into `mkdir && pwd && uname && ls`.
+Also removed its compulsory next-write instructions and workspace-only metadata
+block. Explicit user exclusions still use the existing exclusion parser; ordinary
+metadata reads do not authorize host changes. Unknown IDs and invalid arguments
+remain dispatcher/schema errors instead of silently becoming shell execution.
+Project workdir inference now requires observed file evidence rather than a planned
+inspection. The prompt no longer demands a first write before project commands.
+
+Validation: 538 guard tests and 28 prompt-contract tests pass in WSL. Replacement
+regressions assert direct/wrapped read and process-list calls never prepare shell,
+selected inspection commands remain unchanged, malformed calls create no execution,
+and host changes and explicit observation exclusions stay protected. The count
+changed because obsolete adapter-specific tests were replaced, not because an
+execution boundary was dropped.
+
+Deployed the two-file diff (including the preceding discovery change) to the local
+WSL plugin with `git apply --check`, preserving pre-existing runtime differences
+(compact prompt selection and native platform code). Confirmed idle before restart
+and idle/active=0 after startup; reverse patch check confirms exact deployment.
+A fresh 4B/32768 chat is testing repair of the existing CSV project. Outcome is not
+yet qualified by this deployment or the unit suites.

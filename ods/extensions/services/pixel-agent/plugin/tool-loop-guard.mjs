@@ -269,8 +269,6 @@ export const OPERATIONS_HOST_COMMAND_COMPLETE_REASON =
 export const OPERATIONS_HOST_COMMAND_EVIDENCE_PREFIX =
   "Pixel verified this owner-approved ODS host command through a structurally matched terminal Operations Broker receipt:";
 
-export const WORKSPACE_UNREQUESTED_PROJECTION_REASON =
-  "This is a sandbox workspace task, not an ODS status or application-list request. Do not call pixel_ods_status or pixel_ods_apps_list. Call tool_search once for write read edit apply_patch exec process, then use the returned exact workspace tool id to inspect or change only the owner-requested workspace path.";
 
 export const OPERATIONS_REQUIRES_PROJECTIONS_REASON =
   "Pixel completed the requested host Operations jobs, but the owner also requested ODS status evidence that is still missing. Call each requested pixel_ods_status or pixel_ods_apps_list projection exactly once now. After every requested projection is verified, continue any explicitly requested workspace work.";
@@ -336,8 +334,6 @@ const WORKSPACE_CONTINUATION_TOOLS = new Set([
   "read", "write", "edit", "apply_patch", "exec", "process",
   "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
 ]);
-const WORKSPACE_INSPECTION_COMPLETE_REASON =
-  "The workspace inspection already completed and returned the directory, kernel, and listing; do not search, list, read the directory, or poll again. Continue the owner's requested task now. If the owner requested new files, call tool_call with id openclaw:core:write and args containing the first workspace-relative path and its full content. Do not call exec or process before that write.";
 const FAILED_TEST_READ_REPAIR_REASON =
   "The verification command failed. Preserve the owner's explicit behavior contract: correct a test only when its expectation contradicts the owner; otherwise repair the implementation, and never weaken an assertion merely to match broken output. A blank label such as `Invalid integer:` is not a helpful empty-input message. When the failure already contains actual and expected evidence, apply one focused edit to the file implicated by the failure (test or implementation), then rerun the same verification command. If the failure is a missing-file error for a file you previously wrote, recreate it before rerunning. If evidence is insufficient, read the relevant file or run a focused diagnostic, then repair and rerun verification. Report an unresolved blocker honestly when the available tools cannot resolve it.";
 const EXACT_DOWNLOAD_BROKER_TOOLS = new Set([
@@ -6278,6 +6274,7 @@ export function createToolLoopGuard({
         githubCanonicalSatisfied: false,
         odsRoutingInitialized: false,
         odsRequestedTools: new Set(),
+        odsExcludedTools: new Set(),
         odsRequiredTools: new Set(),
         exactDownloadRequested: false,
         researchDownloadSubmissions: new Map(),
@@ -6350,8 +6347,6 @@ export function createToolLoopGuard({
         workspacePreview: undefined,
         workspaceLastVerifiedPreview: undefined,
         workspacePreviewVerifiedDirectory: undefined,
-        workspaceInspectionRouted: false,
-        workspaceInspectionPollCorrections: 0,
         invalidUnittestBlocks: 0,
         invalidParsedJsonBlocks: 0,
         noOpEditBlocks: 0,
@@ -6830,100 +6825,9 @@ export function createToolLoopGuard({
         }
       }
     }
-    let workspaceInspectionShape = false;
-    let workspaceInspectionAdapted = false;
-    if (
-      state?.workspaceTaskDirectory &&
-      state.workspaceTaskPath &&
-      !state.workspaceVisualContinuationRequested &&
-      toolName === "tool_call" &&
-      pendingParams &&
-      typeof pendingParams === "object" &&
-      !Array.isArray(pendingParams) &&
-      typeof pendingParams.id === "string" &&
-      pendingParams.args &&
-      typeof pendingParams.args === "object" &&
-      !Array.isArray(pendingParams.args)
-    ) {
-      const nestedName = pendingParams.id.split(":").at(-1);
-      const keys = Object.keys(pendingParams.args);
-      const requestedPath = normalizeWorkspaceFilePath(pendingParams.args.path);
-      const basename = state.workspaceTaskPath.split("/").at(-1);
-      const matchesAuthorizedPath =
-        requestedPath === state.workspaceTaskPath || requestedPath === basename;
-      // Small models commonly call an invented `ls` catalog id, or call the
-      // exact exec id with only a path. Adapt only that read-first shape, only
-      // for the one workspace path explicitly authorized in this live owner
-      // request. Creating the named directory is already required by the
-      // requested workspace task; no host or Operations authority is added.
-      const exactAuthorizedPathShape =
-        keys.length === 1 &&
-        keys[0] === "path" &&
-        matchesAuthorizedPath &&
-        (pendingParams.id === "ls" || nestedName === "exec");
-      const readDirectoryShape =
-        keys.length === 1 &&
-        keys[0] === "path" &&
-        matchesAuthorizedPath &&
-        nestedName === "read";
-      const emptyProcessListShape =
-        keys.length === 1 &&
-        keys[0] === "action" &&
-        pendingParams.args.action === "list" &&
-        (nestedName === "process" || nestedName === "exec") &&
-        state.pendingExecSessions.size === 0;
-      const normalizedInspectionCommand =
-        typeof pendingParams.args.command === "string"
-          ? pendingParams.args.command.trim().replace(/\s+/g, " ")
-          : undefined;
-      const execDirectoryShape =
-        nestedName === "exec" &&
-        // PTY/background/yield controls do not change the semantics of this
-        // exact read-only listing. Compact models frequently copy them from
-        // the catalog description, so include them without accepting any
-        // additional command, cwd, environment, or input surface.
-        keys.every((key) =>
-          ["command", "yieldMs", "timeout", "pty", "background"].includes(key)
-        ) &&
-        new Set([
-          `ls -la /workspace/${state.workspaceTaskPath}`,
-          `ls -la /workspace/${state.workspaceTaskPath}/`,
-          `ls -la ${state.workspaceTaskPath}`,
-          `ls -la ${state.workspaceTaskPath}/`,
-        ]).has(normalizedInspectionCommand);
-      const unrelatedProjectionShape =
-        state.workspaceTaskRequested &&
-        !state.operationsRequired &&
-        state.odsRequiredTools.size === 0 &&
-        (nestedName === "pixel_ods_status" || nestedName === "pixel_ods_apps_list");
-      // Once the exact owner-named artifact has been written, a read of that
-      // path is verification, not a confused directory-inspection attempt.
-      // Preserve it byte-for-byte instead of routing it back through exec.
-      workspaceInspectionShape =
-        !state.successfulWritePaths.has(state.workspaceTaskPath) &&
-        (
-          exactAuthorizedPathShape ||
-          readDirectoryShape ||
-          emptyProcessListShape ||
-          execDirectoryShape ||
-          unrelatedProjectionShape
-        );
-      if (!state.workspaceInspectionRouted && workspaceInspectionShape) {
-        const inspectionPath = state.workspaceTaskPath;
-        const command =
-          `mkdir -p -- ${inspectionPath} && pwd && uname -sr && ls -la -- ${inspectionPath}`;
-        pendingParams = {
-          id: "openclaw:core:exec",
-          args: { command },
-        };
-        state.workspaceInspectionRouted = true;
-        workspaceInspectionAdapted = true;
-      }
-    }
     const workspaceDirectoryReady = Boolean(
       state?.workspaceTaskDirectory &&
       (
-        state.workspaceInspectionRouted ||
         state.workspaceRequestedFiles.some((file) =>
           state.successfulWritePaths.has(`${state.workspaceTaskDirectory}/${file}`) ||
           state.successfulReadPaths.has(`${state.workspaceTaskDirectory}/${file}`)
@@ -6933,8 +6837,6 @@ export function createToolLoopGuard({
     if (
       state?.workspaceTaskDirectory &&
       workspaceDirectoryReady &&
-      !workspaceInspectionAdapted &&
-      !workspaceInspectionShape &&
       toolName === "tool_call" &&
       pendingParams &&
       typeof pendingParams === "object" &&
@@ -7180,62 +7082,6 @@ export function createToolLoopGuard({
     const selectedEvent = selectedToolName === toolName
       ? { ...event, params: selectedParams }
       : { ...event, toolName: selectedToolName, params: selectedParams };
-    const inspectionCompleteReason = () => {
-      const nextFile = state?.workspaceRequestedFiles?.find((file) => {
-        const path = state.workspaceTaskDirectory
-          ? `${state.workspaceTaskDirectory}/${file}`
-          : file;
-        return !state.successfulWritePaths.has(path);
-      });
-      if (!nextFile) return WORKSPACE_INSPECTION_COMPLETE_REASON;
-      const nextPath = state.workspaceTaskDirectory
-        ? `${state.workspaceTaskDirectory}/${nextFile}`
-        : nextFile;
-      const pythonTestFile =
-        /^(?:test(?:_[A-Za-z0-9._-]+)?|[A-Za-z0-9._-]+_test)\.py$/i.test(nextFile);
-      const testFileHint = !pythonTestFile
-        ? ""
-        : state.workspacePythonUnittestRequested
-          ? " The owner explicitly requires unittest: include import unittest, at least one " +
-            "class inheriting unittest.TestCase, and only the requested test_* methods; omit " +
-            "comments, docstrings, helper cases, and a custom print runner."
-          : " For a Python test file, include every required test-framework and implementation import.";
-      return (
-        "Inspection complete. Make exactly one tool call next: call tool_call with " +
-        `id openclaw:core:write and args path ${JSON.stringify(nextPath)} plus content ` +
-        "containing the complete requested file you compose. Keep it concise (under 1000 " +
-        `characters when the requirements fit) and omit unrequested demos or CLI wrappers.${testFileHint} ` +
-        "Do not call tool_search, read, exec, or process before this write."
-      );
-    };
-    // Discovery is read-only capability lookup, not a workspace plan. Preserve
-    // the model's query and let the shared run budget bound repeated discovery.
-    // Selecting a result still passes the tool's execution policy below.
-    if (
-      state?.workspaceInspectionRouted &&
-      toolName === "tool_call" &&
-      !workspaceInspectionAdapted &&
-      (
-        workspaceInspectionShape ||
-        (
-          (selectedToolName === "exec" || selectedToolName === "process") &&
-          selectedParams?.action === "poll" &&
-          typeof selectedParams.sessionId !== "string" &&
-          state.pendingExecSessions.size === 0
-        )
-      )
-    ) {
-      if (state.workspaceInspectionPollCorrections === 0) {
-        state.workspaceInspectionPollCorrections = 1;
-        return {
-          block: true,
-          blockReason: inspectionCompleteReason(),
-        };
-      }
-      state.codingExhausted = true;
-      state.codingTerminalBlocks = 1;
-      return { block: true, blockReason: CODING_RETRY_EXHAUSTED_REASON };
-    }
     if (state) {
       const writePath = selectedToolName === "write"
         ? normalizeWorkspaceFilePath(selectedParams?.path)
@@ -7400,6 +7246,9 @@ export function createToolLoopGuard({
       ? wrappedToolTarget.split(":").at(-1)
       : undefined;
     const effectiveToolName = wrappedToolName ?? toolName;
+    if (state?.odsExcludedTools.has(effectiveToolName)) {
+      return {block: true, blockReason: "The owner explicitly excluded this ODS observation from the current request. Continue within the requested scope."};
+    }
     if (state?.ownerIntentObserved && state.operationsRequired &&
         ["pixel_ods_status", "pixel_ods_apps_list"].includes(effectiveToolName)) {
       const permitted = effectiveToolName === "pixel_ods_status"
@@ -7410,21 +7259,6 @@ export function createToolLoopGuard({
       return normalizedParams === undefined ? undefined : { params: normalizedParams };
     }
 
-    if (
-      state?.workspaceTaskRequested &&
-      !state.operationsRequired &&
-      state.odsRequiredTools.size === 0 &&
-      !state.odsRequestedTools.has(effectiveToolName) &&
-      (effectiveToolName === "pixel_ods_status" ||
-        effectiveToolName === "pixel_ods_apps_list")
-    ) {
-      return {
-        block: true,
-        blockReason: state.workspaceInspectionRouted
-          ? inspectionCompleteReason()
-          : WORKSPACE_UNREQUESTED_PROJECTION_REASON,
-      };
-    }
     const workspaceOperation =
       effectiveToolName === EVIDENCE_REPORT_TOOL
         ? "write"
@@ -8527,6 +8361,13 @@ export function createToolLoopGuard({
           state.operationsWorkspaceContinuationRequested
             ? userMessageWorkspaceContinuationPath(event?.messages, event?.prompt)
             : undefined;
+      }
+      const observationIntent = currentOwnerIntentText(event?.messages, event?.prompt) ?? "";
+      for (const [name, pattern] of [
+        ["pixel_ods_status", "ODS\\s+status|pixel_ods_status"],
+        ["pixel_ods_apps_list", "ODS\\s+(?:apps?|applications?)|pixel_ods_apps_list"],
+      ]) {
+        if (explicitlyRejectsOdsTool(observationIntent, pattern)) state.odsExcludedTools.add(name);
       }
       if (!state.operationsRequired && !state.odsRoutingInitialized) {
         const requirements = userMessageOdsToolRequirements(event?.messages, event?.prompt);

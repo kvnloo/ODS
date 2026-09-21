@@ -26,7 +26,7 @@ import {
 } from "./tool-loop-guard.mjs";
 
 const PLAYGROUND_PROJECT_CONTRACT =
-  "For a new project, choose one short descriptive folder under Playground, for example Playground/snake-game or Playground/weather-tool, and create every project file there. This is a real workspace folder, not a display label. Use the exact canonical paths returned by tools, including any collision suffix, for later reads, edits, exec workdir and preview relativeDirectory. Preserve explicitly requested paths and existing projects in their current locations; never move them into Playground. Create the first file with write before running project commands. Keep shell commands relative to the chosen workdir; never invent host-specific paths.";
+  "For a new project, choose one short descriptive folder under Playground, for example Playground/snake-game or Playground/weather-tool, and create every project file there. This is a real workspace folder, not a display label. Use the exact canonical paths returned by tools, including any collision suffix, for later reads, edits, exec workdir and preview relativeDirectory. Preserve explicitly requested paths and existing projects in their current locations; never move them into Playground. Keep shell commands relative to the chosen workdir; never invent host-specific paths.";
 
 // One bounded core for every model. Detailed operating guides are loaded on demand.
 export const ODS_COMPACT_CONVERSATION_CONTRACT = [

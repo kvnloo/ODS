@@ -89,7 +89,6 @@ import {
   WEB_FETCH_PUBLIC_ONLY_REASON,
   WEB_LOOP_ABORT_REASON,
   WEB_LOOP_DELIVERY_REASON,
-  WORKSPACE_UNREQUESTED_PROJECTION_REASON,
   WORKSPACE_PREVIEW_REQUIRES_TOOL_REASON,
   WORKSPACE_PREVIEW_NOT_CREATED_DELIVERY_PREFIX,
   WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX,
@@ -1289,92 +1288,32 @@ test("workspace discovery permits new capabilities without authorizing their eff
   }).blockReason, OPERATIONS_NOT_REQUESTED_REASON);
 });
 
-test("routes a compact workspace task to core tools and blocks unrequested Operations", () => {
-  const prepared = [];
-  const guard = createToolLoopGuard({
-    execControl: {
-      prepare: (runId, command) => {
-        prepared.push([runId, command]);
-        return command;
-      },
-    },
-  });
-  const prompt =
-    "Work autonomously in /workspace/project. Inspect it, create probe.py, and run its tests.";
-  assert.equal(userMessageRequestsWorkspaceTools([], prompt), true);
-  assert.equal(userMessageWorkspaceContinuationPath([], prompt), "project");
-  guard.observeRun(
-    { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
-    "pixel",
-    { prompt }
-  );
-  for (const query of ["probe.py", "python documentation", "probe.py"]) {
-    assert.equal(call(guard, "tool_search", {
-      event: { params: { query, limit: 3 } },
-      context: { sessionId: undefined },
-    }), undefined, "preserve the selected capability and lookup arguments");
+test("workspace inspection preserves effects instead of scripting the next action", () => {
+  for (const wrapped of [false, true]) {
+    const prepared = [];
+    const guard = createToolLoopGuard({execControl: {prepare: (_run, command) => {
+      prepared.push(command); return command;
+    }}});
+    guard.observeRun({agentId: "pixel", runId: "run-1", sessionId: "session-1"}, "pixel", {
+      prompt: "Work autonomously in /workspace/project. Inspect it, create probe.py, and run its tests.",
+    });
+    const invoke = (name, args) => wrapped
+      ? call(guard, "tool_call", {event: {params: {id: name, args}}})
+      : call(guard, name, {event: {params: args}});
+    for (const name of ["pixel_ods_status", "pixel_ods_apps_list"]) {
+      assert.notEqual(invoke(name, {})?.block, true);
+    }
+    const read = invoke("read", {path: "project"});
+    assert.notEqual(read?.block, true);
+    assert.notEqual(read?.params?.id, "openclaw:core:exec");
+    assert.notEqual(invoke("process", {action: "list"})?.block, true);
+    assert.deepEqual(prepared, [], "read/list/projection cannot create a directory or run shell");
+    assert.notEqual(invoke("tool_search", {query: "Python csv documentation", limit: 2})?.block, true);
+    assert.notEqual(invoke("exec", {command: "ls -la /workspace/project"})?.block, true);
+    assert.deepEqual(prepared, ["ls -la /workspace/project"], "execute only the model-selected command before any write");
+    assert.equal(invoke("pixel_ops_shell_propose", {target: "ods-host", command: "pwd"}).blockReason,
+      OPERATIONS_NOT_REQUESTED_REASON, "read-only discovery does not authorize host mutation");
   }
-  const adaptedInspection = call(guard, "tool_call", {
-    event: {
-      params: {
-        id: "ls",
-        args: { path: "project" },
-      },
-    },
-    context: { sessionId: undefined },
-  });
-  assert.deepEqual(adaptedInspection, {
-    params: {
-      id: "openclaw:core:exec",
-      args: {
-        command: "mkdir -p -- project && pwd && uname -sr && ls -la -- project",
-      },
-    },
-  });
-  assert.deepEqual(prepared, [[
-    "run-1",
-    "mkdir -p -- project && pwd && uname -sr && ls -la -- project",
-  ]]);
-  // Inspection must not turn a later capability lookup into a forced write.
-  for (const query of ["Python csv documentation", "browser verification"]) {
-    assert.equal(call(guard, "tool_search", {
-      event: { params: { query, limit: 2 } },
-    }), undefined);
-    assert.notEqual(call(guard, "tool_call", {
-      event: { params: { id: "tool_search", args: { query, limit: 2 } } },
-    })?.block, true);
-  }
-  const invalidPoll = call(guard, "tool_call", {
-    event: {
-      params: {
-        id: "openclaw:core:exec",
-        args: { yieldMs: 100, action: "poll" },
-      },
-    },
-    context: { sessionId: undefined },
-  });
-  assert.equal(invalidPoll.block, true);
-  assert.match(invalidPoll.blockReason, /Inspection complete/);
-  assert.match(invalidPoll.blockReason, /openclaw:core:write/);
-  assert.match(invalidPoll.blockReason, /project\/probe\.py/);
-  assert.equal(prepared.length, 1);
-  assert.equal(
-    call(guard, "pixel_ops_shell_propose", {
-      event: { params: { target: "ods-host", command: "pwd" } },
-    }).blockReason,
-    OPERATIONS_NOT_REQUESTED_REASON
-  );
-  assert.equal(
-    call(guard, "tool_call", {
-      event: {
-        params: {
-          id: "openclaw:pixel-operations-broker:pixel_ops_shell_propose",
-          args: { target: "ods-host", command: "pwd" },
-        },
-      },
-    }).blockReason,
-    UNREQUESTED_OPERATIONS_TERMINAL_REASON
-  );
 });
 
 test("first unrequested Operations correction allows authorized workspace write and read", () => {
@@ -1492,168 +1431,23 @@ test("unrequested Operations abort failures remain closed and do not poison a di
   }), { params: { actions: ["host.cpu"] } });
 });
 
-test("adapts common small-model inspection aliases only to the owner workspace", () => {
-  const shapes = [
-    { id: "openclaw:core:process", args: { action: "list" } },
-    { id: "openclaw:core:exec", args: { action: "list" } },
-    { id: "read", args: { path: "project" } },
-    {
-      id: "exec",
-      args: {
-        command: "ls   -la   /workspace/project/",
-        pty: true,
-        yieldMs: 100,
-      },
-    },
-  ];
-  for (const [index, shape] of shapes.entries()) {
-    const prepared = [];
-    const guard = createToolLoopGuard({
-      execControl: {
-        prepare: (runId, command) => {
-          prepared.push([runId, command]);
-          return command;
-        },
-      },
-    });
-    const prompt =
-      "Work autonomously in /workspace/project. Inspect it, create probe.py, and run its tests.";
-    guard.observeRun(
-      { agentId: "pixel", runId: `alias-${index}`, sessionId: `alias-session-${index}` },
-      "pixel",
-      { prompt }
-    );
-    assert.deepEqual(
-      call(guard, "tool_call", {
-        event: { runId: `alias-${index}`, params: shape },
-        context: { runId: `alias-${index}`, sessionId: undefined },
-      }),
-      {
-        params: {
-          id: "openclaw:core:exec",
-          args: {
-            command: "mkdir -p -- project && pwd && uname -sr && ls -la -- project",
-          },
-        },
-      }
-    );
-    assert.deepEqual(prepared, [[
-      `alias-${index}`,
-      "mkdir -p -- project && pwd && uname -sr && ls -la -- project",
-    ]]);
-    const repeatedInspection = call(guard, "tool_call", {
-      event: { runId: `alias-${index}`, params: shape },
-      context: { runId: `alias-${index}`, sessionId: undefined },
-    });
-    assert.equal(repeatedInspection.block, true);
-    assert.match(repeatedInspection.blockReason, /Inspection complete/);
-    assert.match(repeatedInspection.blockReason, /openclaw:core:write/);
-    assert.equal(prepared.length, 1);
-  }
-
-  const guard = createToolLoopGuard();
-  const prompt =
-    "Work autonomously in /workspace/project. Inspect it, create probe.py, and run its tests.";
-  guard.observeRun(
-    { agentId: "pixel", runId: "wrong-path", sessionId: "wrong-path-session" },
-    "pixel",
-    { prompt }
-  );
-  assert.deepEqual(
-    call(guard, "tool_call", {
-      event: {
-        runId: "wrong-path",
-        params: { id: "read", args: { path: "another-project" } },
-      },
-      context: { runId: "wrong-path", sessionId: undefined },
-    }),
-    {
-      params: {
-        id: "read",
-        args: { path: "project/another-project" },
-      },
-    }
-  );
-});
-
-test("keeps unrequested ODS projections out of workspace-only tasks", () => {
+test("malformed workspace calls are not repaired into invented shell effects", () => {
   const prepared = [];
-  const guard = createToolLoopGuard({
-    execControl: {
-      prepare: (runId, command) => {
-        prepared.push([runId, command]);
-        return command;
-      },
-    },
+  const guard = createToolLoopGuard({execControl: {prepare: (_run, command) => {
+    prepared.push(command); return command;
+  }}});
+  guard.observeRun({agentId: "pixel", runId: "run-1", sessionId: "session-1"}, "pixel", {
+    prompt: "Work autonomously in /workspace/project. Inspect it, create probe.py, and run its tests.",
   });
-  const prompt =
-    "Work autonomously in /workspace/project. Inspect it, create probe.py, and run its tests.";
-  guard.observeRun(
-    { agentId: "pixel", runId: "projection-detour", sessionId: "projection-session" },
-    "pixel",
-    { prompt }
-  );
-
-  assert.deepEqual(
-    call(guard, "tool_call", {
-      event: {
-        runId: "projection-detour",
-        params: { id: "pixel_ods_status", args: { action: "status" } },
-      },
-      context: { runId: "projection-detour", sessionId: undefined },
-    }),
-    {
-      params: {
-        id: "openclaw:core:exec",
-        args: {
-          command: "mkdir -p -- project && pwd && uname -sr && ls -la -- project",
-        },
-      },
-    }
-  );
-  assert.deepEqual(prepared, [[
-    "projection-detour",
-    "mkdir -p -- project && pwd && uname -sr && ls -la -- project",
-  ]]);
-
-  const repeatedProjection = call(guard, "pixel_ods_apps_list", {
-    event: { runId: "projection-detour", params: {} },
-    context: { runId: "projection-detour", sessionId: undefined },
-  });
-  assert.equal(repeatedProjection.block, true);
-  assert.match(repeatedProjection.blockReason, /Inspection complete/);
-  assert.match(repeatedProjection.blockReason, /openclaw:core:write/);
-
-  const directGuard = createToolLoopGuard();
-  directGuard.observeRun(
-    { agentId: "pixel", runId: "direct-projection", sessionId: "direct-session" },
-    "pixel",
-    { prompt }
-  );
-  assert.deepEqual(
-    call(directGuard, "pixel_ods_status", {
-      event: { runId: "direct-projection", params: {} },
-      context: { runId: "direct-projection", sessionId: undefined },
-    }),
-    { block: true, blockReason: WORKSPACE_UNREQUESTED_PROJECTION_REASON }
-  );
-
-  const mixedGuard = createToolLoopGuard();
-  mixedGuard.observeRun(
-    { agentId: "pixel", runId: "mixed-projection", sessionId: "mixed-session" },
-    "pixel",
-    {
-      prompt:
-        "Use ODS tools to identify the exact active model, then inspect /workspace/project and create probe.py.",
-    }
-  );
-  assert.equal(
-    call(mixedGuard, "pixel_ods_status", {
-      event: { runId: "mixed-projection", params: {} },
-      context: { runId: "mixed-projection", sessionId: undefined },
-    }),
-    undefined
-  );
+  for (const shape of [
+    {id: "ls", args: {path: "project"}},
+    {id: "exec", args: {path: "project"}},
+    {id: "exec", args: {action: "list"}},
+  ]) {
+    const result = call(guard, "tool_call", {event: {params: shape}});
+    assert.equal(result?.params?.args?.command, undefined);
+    assert.deepEqual(prepared, [], "schema/discovery errors must not manufacture execution");
+  }
 });
 
 test("binds a basename-relative file path under the exact nested owner directory", () => {
@@ -1918,43 +1712,10 @@ test("keeps compact-model workspace files, commands, and repair evidence in the 
     "pixel",
     { prompt }
   );
-  const inspection = call(guard, "tool_call", {
-    event: {
-      toolCallId: "inspect-project",
-      params: { id: "read", args: { path: "project" } },
-    },
-    context: { toolCallId: "inspect-project" },
-  });
-  assert.deepEqual(inspection, {
-      params: {
-        id: "openclaw:core:exec",
-        args: {
-          command: "mkdir -p -- project && pwd && uname -sr && ls -la -- project",
-        },
-      },
-  });
-  const inspectionResult = wrappedCoreResult("exec", {
-    content: [{ type: "text", text: "/workspace\nLinux test\ntotal 0" }],
-    details: { status: "completed", exitCode: 0, cwd: "/workspace" },
-  });
-  afterCall(guard, "tool_call", {
-    event: {
-      toolCallId: "inspect-project",
-      params: inspection.params,
-      result: inspectionResult,
-    },
-    context: { toolCallId: "inspect-project" },
-  });
-  const persistedInspection = persistToolResult(
-    guard,
-    "tool_call",
-    "inspect-project",
-    inspectionResult
-  );
-  assert.match(
-    persistedInspection.message.content.at(-1).text,
-    /project\/normalize_name\.py/
-  );
+  // Read-only inspection stays a read; no mkdir or substitute execution.
+  assert.equal(call(guard, "tool_call", {
+    event: {params: {id: "read", args: {path: "project"}}},
+  }), undefined);
 
   const write = call(guard, "tool_call", {
     event: {
@@ -3888,7 +3649,7 @@ test("explicit negative ODS status intent never creates a compulsory projection"
   assert.notEqual(call(guard, "tool_call", { event: { params: {
     id: "write", args: { path: "health-conversion-demo/input.csv", text: "item,count\nDesk lamp,2\n" },
   } } })?.block, true);
-  assert.equal(call(guard, "pixel_ods_status").blockReason, WORKSPACE_UNREQUESTED_PROJECTION_REASON);
+  assert.match(call(guard, "pixel_ods_status").blockReason, /owner explicitly excluded/);
   for (const verb of ["inspect", "check", "observe", "report", "list"]) {
     assert.deepEqual(userMessageOdsToolRequirements([], `Create input.csv in the workspace. Do not ${verb} ODS status or ODS applications.`), []);
   }
