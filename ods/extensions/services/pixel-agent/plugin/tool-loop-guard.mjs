@@ -6486,7 +6486,7 @@ export function createToolLoopGuard({
     if (state?.managedTeamWorker && ['task','hub','sessions_spawn','sessions_send','subagents'].includes(delegatedName)) {
       return {block:true,blockReason:'This team is already managed by the owner. Do your assigned work in this session; creating or steering more agents is disabled for team workers.'};
     }
-    if (state?.managedTeamReadOnly && !['tool_search','read','web_search','web_fetch','pixel_ods_research','pixel_ods_web_extract','pixel_ods_ask_user','pixel_ods_goal','pixel_ods_activity','pixel_ods_history','session_status','memory_search','memory_get'].includes(delegatedName)) {
+    if (state?.managedTeamReadOnly && !['tool_search','read','web_search','web_fetch','pixel_ods_research','pixel_ods_web_extract','pixel_ods_ask_user','pixel_ods_goal','pixel_ods_activity','pixel_ods_history','pixel_ods_skill','session_status','memory_search','memory_get'].includes(delegatedName)) {
       return {block:true,blockReason:'Your team role is read-only. Do not create, edit, execute commands, publish, or operate services. Review the supplied evidence using read/search tools if needed, then return your findings as text. The Builder owns implementation and test execution.'};
     }
     if (state?.ownerQuestions) return {block:true, blockReason:'Waiting for the owner to answer the clarification questions. End this turn without further tools; never choose answers for the owner.'};
@@ -6501,7 +6501,7 @@ export function createToolLoopGuard({
     // A command result is not an ODS installation receipt; managed installation
     // stays in the request coordinator regardless of the model's wording.
     const asksOwner = toolName === 'pixel_ods_ask_user' || (toolName === 'tool_call' && ['pixel_ods_ask_user','openclaw:pixel-ods:pixel_ods_ask_user'].includes(event?.params?.id));
-    if (asksOwner || ['pixel_ods_goal','pixel_ods_activity'].includes(delegatedName)) return state?.clientCancelled ? {block:true,blockReason:CLIENT_CANCELLED_REASON} : undefined;
+    if (asksOwner || ['pixel_ods_goal','pixel_ods_activity','pixel_ods_skill'].includes(delegatedName)) return state?.clientCancelled ? {block:true,blockReason:CLIENT_CANCELLED_REASON} : undefined;
     if (state && !state.clientCancelled && !state.recursiveDeleteDenied && !state.unrequestedOperationsTerminal
       && !state.privateNetworkPrompt && !state.operationsRequired && !state.exactDownloadRequested && !state.codingExhausted) {
       state.playgroundRouting ??= {};

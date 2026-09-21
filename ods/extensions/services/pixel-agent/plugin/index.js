@@ -1,3 +1,4 @@
+import {createAgentSkillTool} from './agent-skills.mjs';
 import {createActivityTool, ACTIVITY_CONTRACT} from './activity-display.mjs';
 import {compactToolResultEnvelope} from './tool-result-envelope.mjs';
 import {createGoalProgress, createGoalProgressTool, GOAL_CONTRACT} from './goal-progress.mjs';
@@ -554,6 +555,7 @@ export default definePluginEntry({
     registerTool(api, createPerplexicaResearchTool({ port: api.pluginConfig?.perplexicaPort }), {
       names: ["pixel_ods_research"],
     });
+    registerTool(api, createAgentSkillTool(), {names:['pixel_ods_skill']});
     registerTool(api, createAskUserTool(), {names:['pixel_ods_ask_user']});
     registerTool(api, createGoalProgressTool(), {names:['pixel_ods_goal']});
     registerTool(api, createActivityTool(), {names:['pixel_ods_activity']});
