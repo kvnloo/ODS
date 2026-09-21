@@ -6489,18 +6489,13 @@ export function createToolLoopGuard({
     if (state?.progressBudget.exhausted) {
       return { block: true, blockReason: RUN_PROGRESS_STOP_REASON };
     }
-    // An explicit GitHub extension request installs through its request-bound
-    // coordinator. Sandbox exec/write cannot produce an installed ODS extension,
-    // even if the package command happens to succeed. Keep research and owner
-    // clarification available without permitting a second installation path.
-    if (state?.githubExtensionRequest && ![
-      'tool_search', 'tool_describe', 'pixel_ods_extension_proposal', 'pixel_ods_python_library_proposal', 'pixel_ods_extension_request_status', 'pixel_ods_extension_request_prepare', 'pixel_ods_extension_request_advance',
-      'pixel_ods_web_extract', 'pixel_ods_research', 'web_search', 'web_fetch',
-      'read', 'pixel_ods_ask_user', 'pixel_ods_goal', 'pixel_ods_activity',
-      'pixel_ods_history', 'session_status', 'memory_search', 'memory_get',
-    ].includes(delegatedName)) {
-      return {block: true, blockReason: 'This tool is not available in the current GitHub extension request. Use tool_search/tool_describe to obtain an existing tool ID and its exact schema; do not invent tool names. Research and proposal tools do not install. pixel_ods_extension_request_status observes the saved request; pixel_ods_extension_request_prepare publishes its accepted recipe; pixel_ods_extension_request_advance manages an owner-requested host installation. Use the original routing IDs. Sandbox commands cannot establish a managed ODS installation.'};
+    if (state?.githubExtensionRequest && ['write','edit','apply_patch','exec','process'].includes(delegatedName)
+        && state.preparationExecutionHost !== 'sandbox') {
+      return {block:true,blockReason:'Isolated extension preparation is unavailable in this execution mode. Workspace commands would run outside the sandbox. Research and managed request tools remain available; do not use host commands as a substitute for isolated experiments.'};
     }
+    // Extension preparation uses the ordinary workspace and sandbox controls.
+    // A command result is not an ODS installation receipt; managed installation
+    // stays in the request coordinator regardless of the model's wording.
     const asksOwner = toolName === 'pixel_ods_ask_user' || (toolName === 'tool_call' && ['pixel_ods_ask_user','openclaw:pixel-ods:pixel_ods_ask_user'].includes(event?.params?.id));
     if (asksOwner || ['pixel_ods_goal','pixel_ods_activity'].includes(delegatedName)) return state?.clientCancelled ? {block:true,blockReason:CLIENT_CANCELLED_REASON} : undefined;
     if (state && !state.clientCancelled && !state.recursiveDeleteDenied && !state.unrequestedOperationsTerminal
@@ -8385,9 +8380,8 @@ export function createToolLoopGuard({
       const state = stateFor(runId);
       state.completionAssurance.begin(currentOwnerIntentText(event?.messages, event?.prompt), event);
       const ownerIntent=currentOwnerIntentText(event?.messages,event?.prompt);
-      if (/^\s*(?:\/goal\s+)?\/extensions?\s+https:\/\/github\.com\//i.test(ownerIntent ?? '')) {
-        state.githubExtensionRequest = true;
-      }
+      if (/^\s*(?:\/goal\s+)?\/extensions?\s+https:\/\/github\.com\//i.test(ownerIntent ?? '')) state.githubExtensionRequest = true;
+      if (capabilities !== undefined) state.preparationExecutionHost = capabilities.executionHost;
       if (ownerIntent) state.playgroundOwnerIntent = ownerIntent;
       if (ownerIntent) state.ownerQuestionIntent=requestsChoiceQuestion(ownerIntent);
       if (teamRole) {state.managedTeamWorker=true;state.managedTeamReadOnly=teamRole!=='Builder';state.managedTeamCoordinator=teamRole==='Coordinator';state.ownerQuestionIntent=teamQuestionIntent;}

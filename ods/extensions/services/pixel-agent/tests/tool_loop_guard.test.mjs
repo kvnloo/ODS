@@ -190,22 +190,41 @@ function seedNamedPreview(guard) {
   return { write, params, details };
 }
 
-test('explicit GitHub extension requests cannot install in the sandbox through direct or deferred tools', () => {
-  const guard = createToolLoopGuard();
-  const context = {agentId:'pixel', runId:'extension-route', sessionId:'extension-session'};
-  guard.observeRun(context, 'pixel', {prompt:'/goal /extensions https://github.com/example/project install'});
-  for (const toolName of ['exec', 'write', 'sessions_spawn', 'pixel_ops_run']) {
-    assert.equal(guard.beforeToolCall({toolName, params:{}}, {...context,toolName}).block, true);
-    assert.equal(guard.beforeToolCall({toolName:'tool_call', params:{id:'openclaw:core:'+toolName,args:{}}}, {...context,toolName:'tool_call'}).block, true);
+test('GitHub extension preparation preserves ordinary sandbox tool access', () => {
+  const scenarios=[
+    ['write',{path:'recipe/notes.txt',content:'repository findings'}],
+    ['read',{path:'recipe/notes.txt'}],
+    ['exec',{command:'python -m pytest',workdir:'recipe'}],
+    ['process',{action:'poll',sessionId:'test-process'}],
+  ];
+  for (const [toolName,params] of scenarios) {
+    for (const deferred of [false,true]) {
+      const run=prompt=>{
+        const guard=createToolLoopGuard();
+        const context={agentId:'pixel',runId:'preparation',sessionId:'preparation-session'};
+        guard.observeRun(context,'pixel',{prompt},{executionHost:'sandbox'});
+        const event=deferred ? {toolName:'tool_call',params:{id:'openclaw:core:'+toolName,args:params}} : {toolName,params};
+        return guard.beforeToolCall(event,{...context,toolName:event.toolName});
+      };
+      assert.deepEqual(run('/extensions https://github.com/example/project prepare and test in sandbox'),
+        run('Prepare and test this repository in the sandbox'),toolName);
+    }
   }
-  for (const toolName of ['tool_search','tool_describe','pixel_ods_extension_proposal','pixel_ods_ask_user']) {
-    const result = guard.beforeToolCall({toolName, params:{}}, {...context,toolName});
-    assert.notEqual(result?.blockReason?.includes('extension coordinator'), true);
+});
+
+test('extension experiments require an actual sandbox instead of gateway execution', () => {
+  for (const executionHost of [undefined,'gateway']) {
+    const guard=createToolLoopGuard();
+    const context={agentId:'pixel',runId:'isolated-preparation',sessionId:'session'};
+    guard.observeRun(context,'pixel',{prompt:'/extensions https://github.com/example/project install'},{executionHost});
+    for (const toolName of ['write','edit','apply_patch','exec','process']) {
+      for (const event of [{toolName,params:{}},{toolName:'tool_call',params:{id:'openclaw:core:'+toolName,args:{}}}]) {
+        const result=guard.beforeToolCall(event,{...context,toolName:event.toolName});
+        assert.equal(result.block,true);
+        assert.match(result.blockReason,/outside the sandbox/);
+      }
+    }
   }
-  const other = {...context,runId:'ordinary-route'};
-  guard.observeRun(other,'pixel',{prompt:'Inspect this GitHub project and run its unit tests.'});
-  const ordinary = guard.beforeToolCall({toolName:'exec',params:{command:'python -m pytest'}},{...other,toolName:'exec'});
-  assert.notEqual(ordinary?.blockReason?.includes('extension coordinator'),true);
 });
 
 test('malformed dispatch failures stop only their active run and retain its verified preview', () => {

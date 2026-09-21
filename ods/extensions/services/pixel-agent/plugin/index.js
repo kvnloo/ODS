@@ -289,7 +289,7 @@ export default definePluginEntry({
       const privateBrowserAccess = privateBrowserAccessForAgent(api.config, AGENT_ID);
       const workspaceRoot = api.config?.agents?.list?.find(agent => agent.id === AGENT_ID)?.workspace
         ?? api.config?.agents?.defaults?.workspace;
-      toolLoopGuard.observeRun(context, AGENT_ID, event, { privateBrowserAccess, workspaceRoot });
+      toolLoopGuard.observeRun(context, AGENT_ID, event, { privateBrowserAccess, workspaceRoot, executionHost: executionHostForAgent(api.config, AGENT_ID) });
       if (!accessRuntime.isProbe(context)) { goalProgress.begin(event, context); taskActivity.begin(event, context); }
       const contract = promptContractForAgent(context, AGENT_ID, event, {
         verificationStatus: toolLoopGuard.verificationStatus(context?.runId),
