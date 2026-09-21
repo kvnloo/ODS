@@ -264,10 +264,12 @@ export default definePluginEntry({
     // separate passes. Keep one process-local guard so the route can see the
     // opaque user -> active session mapping observed by the runtime hook.
     const toolLoopGuard = toolLoopGuardRegistry.get({
-      abortRun: abortAgentHarnessRun,
+      abortRun: (sessionId, sessionKey) => abortAgentHarnessRun(
+        (sessionKey && resolveActiveEmbeddedRunSessionId(sessionKey)) || sessionId
+      ),
       abortRunAndDrain: (sessionId, sessionKey) =>
         abortAndDrainAgentHarnessRun({
-          sessionId,
+          sessionId: (sessionKey && resolveActiveEmbeddedRunSessionId(sessionKey)) || sessionId,
           sessionKey,
           settleMs: 4000,
           forceClear: false,

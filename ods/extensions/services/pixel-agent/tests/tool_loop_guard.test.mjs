@@ -15168,3 +15168,18 @@ test("catalog wrong-tool correction gives an executable next step without changi
     }}})?.block, true, "guidance never bypasses required inspection");
   }
 });
+
+
+test('an unacknowledged progress abort is retried at model end until confirmed', () => {
+  const attempts=[];
+  const guard=createToolLoopGuard({abortRun:(id,key)=>{attempts.push([id,key]);return attempts.length===2;}});
+  const context={agentId:'pixel',runId:'retry-abort',sessionId:'session-retry',sessionKey:'agent:pixel:retry'};
+  guard.observeRun(context,'pixel',{prompt:'Make a site'});
+  for(let i=0;i<9;i++) guard.observeModelCall({},context);
+  guard.observeModelEnd({},context);
+  assert.equal(attempts.length,1);
+  guard.observeModelEnd({},context);
+  guard.observeModelEnd({},context);
+  assert.deepEqual(attempts,[['session-retry','agent:pixel:retry'],['session-retry','agent:pixel:retry']]);
+  assert.equal(guard.deliveryVerificationForRun('retry-abort').status,'failed');
+});

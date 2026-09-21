@@ -6442,7 +6442,6 @@ export function createToolLoopGuard({
     if (!state?.progressBudget.exhausted || state.progressAbortAttempted) return;
     const sessionId = state.currentSessionId;
     if (!sessionId || sessionRuns.get(sessionId) !== runId) return;
-    state.progressAbortAttempted = true;
     try { execControl?.signal?.(runId); }
     catch (error) { warn(`Pixel progress-limit execution signal failed: ${String(error)}`); }
     // Do not clear the session or its history. Abort only its active harness
@@ -6451,7 +6450,10 @@ export function createToolLoopGuard({
     // construction can strand the provider prompt and its session write lock.
     // Tool hooks enforce the terminal budget while this boundary is pending.
     try {
-      const aborted = abortRun?.(sessionId);
+      const aborted = abortRun?.(sessionId, state.currentSessionKey);
+      // A rejected abort is not completion. Retry at the next model-end
+      // boundary, while ownership still matches this exact run.
+      state.progressAbortAttempted = aborted === true;
       warn(`Pixel progress-limit abort ${aborted ? "requested" : "not acknowledged"}: ${runId}`);
     } catch (error) { warn(`Pixel progress-limit abort failed: ${String(error)}`); }
   }
