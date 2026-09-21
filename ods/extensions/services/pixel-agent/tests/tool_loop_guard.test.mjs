@@ -2745,11 +2745,14 @@ test("native extension read reports a terminal failed inspection without inventi
   assert.equal(call(guard, "pixel_ods_extensions", { event: { params } })?.block, undefined);
   afterCall(guard, "pixel_ods_extensions", { event: { params, result: { details: {
     jobId: "ops-1234567890123-dddddddddddd", status: "succeeded", waitTimedOut: false,
-    steps: [lifecycleStep("inspect", lifecycleResult("inspect", { extensionId: "comfyui", outcome: "failed" }))],
+    steps: [lifecycleStep("inspect", lifecycleResult("inspect", { extensionId: "comfyui", outcome: "failed",
+      previousStatus: "unknown", currentStatus: "unknown" }))],
   } } } });
   const verification = guard.deliveryVerificationForRun("run-1");
   assert.equal(verification.status, "passed");
   assert.match(verification.text, /Inspection: `failed`/);
+  assert.match(verification.text, /current state: `unknown`/);
+  assert.doesNotMatch(verification.text, /Pixel verified|not_installed/);
   assert.match(verification.text, /configuration could not be established/);
   assert.doesNotMatch(verification.text, /configuration keys: none|Inspection: `ready`/);
   // A terminal read failure is evidence, never permission for a mutation.

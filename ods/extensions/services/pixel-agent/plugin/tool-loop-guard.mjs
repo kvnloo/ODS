@@ -3341,8 +3341,10 @@ function extensionLifecycleResult(step, submittedAction) {
     value.action !== expectedAction ||
     value.extensionId !== submittedParameters.serviceId ||
     !["ready", "inspected", "blocked", "noop", "succeeded", "pending", "failed"].includes(value.outcome) ||
-    !EXTENSION_LIFECYCLE_STATUSES.has(value.previousStatus) ||
-    !EXTENSION_LIFECYCLE_STATUSES.has(value.currentStatus) ||
+    !(EXTENSION_LIFECYCLE_STATUSES.has(value.previousStatus) ||
+      (value.outcome === "failed" && value.previousStatus === "unknown")) ||
+    !(EXTENSION_LIFECYCLE_STATUSES.has(value.currentStatus) ||
+      (value.outcome === "failed" && value.currentStatus === "unknown")) ||
     typeof value.changed !== "boolean" ||
     typeof value.externalEffectOccurred !== "boolean" ||
     !exactKeys(value.rollback, ["attempted", "succeeded"]) ||
@@ -3612,7 +3614,9 @@ function extensionInspectionEvidence(step, action, jobId) {
   const result = extensionLifecycleResult(step, action);
   if (!result || result.action !== "inspect") return undefined;
   return [
-    OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX,
+    result.outcome === "failed"
+      ? "ODS could not verify this extension through the Operations Broker. A failed lookup does not establish that an extension is absent."
+      : OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX,
     `- Target: \`${action.target}\`; extension: \`${result.extensionId}\`.`,
     `- Inspection: \`${result.outcome}\`; current state: \`${result.currentStatus}\`.`,
     result.outcome === "failed"

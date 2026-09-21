@@ -1457,8 +1457,10 @@ def _error_result(action: str, extension_id: str) -> dict[str, Any]:
         action=action if action in ALLOWED_ACTIONS else "inspect",
         extension_id=extension_id if SERVICE_ID.fullmatch(extension_id or "") else "invalid",
         outcome="failed",
-        previous_status="not_installed",
-        current_status="not_installed",
+        # A rejected identifier, unavailable API or invalid receipt gives no
+        # evidence about installation. Absence is only a catalog observation.
+        previous_status="unknown",
+        current_status="unknown",
         changed=False,
         external_effect=False,
         required_configuration=[],

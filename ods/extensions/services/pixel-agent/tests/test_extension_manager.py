@@ -37,6 +37,16 @@ def detail(status: str, *, required: tuple[str, ...] = ()) -> dict[str, object]:
 
 
 class ExtensionManagerTests(unittest.TestCase):
+    def test_failed_lookup_does_not_invent_an_uninstalled_state(self):
+        for action in ('inspect', 'install', 'enable', 'disable', 'remove'):
+            with self.subTest(action=action):
+                result = manager._error_result(action, 'unknown-extension')
+                self.assertEqual(result['outcome'], 'failed')
+                self.assertEqual(result['previousStatus'], 'unknown')
+                self.assertEqual(result['currentStatus'], 'unknown')
+                self.assertFalse(result['changed'])
+                self.assertFalse(result['externalEffectOccurred'])
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
