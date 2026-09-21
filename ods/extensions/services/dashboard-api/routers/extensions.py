@@ -1528,7 +1528,10 @@ async def chat_extension_request_context(owner, chat_id, request_id, command, *,
                 'draft. Its installation outcome is unknown. Do not replace the proposal, guess '
                 'a revision or start another installation; report that recovery requires inspection.')
             return context
-    if include_evidence:
+    # A bound recipe already has immutable source evidence. Follow-ups need fresh
+    # local operation state, not another network research pass. The agent can
+    # explicitly inspect source again when its task calls for it.
+    if include_evidence and not current.get('proposal'):
         from extension_github import inspect_repository, inspect_installation_layout
         import httpx
         try:

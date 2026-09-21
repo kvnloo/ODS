@@ -246,7 +246,7 @@ def test_goal_wrapped_extension_uses_the_same_request_route():
         command_repository('explain /goal /extensions https://github.com/owner/repo')
 
 
-def test_followup_recovers_bound_proposal_and_inspects_its_commit(monkeypatch, tmp_path):
+def test_followup_recovers_bound_proposal_without_network_research(monkeypatch, tmp_path):
     from routers import extensions
     from extension_recipe_drafts import save_draft
     from test_extension_recipe_validation import candidate
@@ -270,7 +270,8 @@ def test_followup_recovers_bound_proposal_and_inspects_its_commit(monkeypatch, t
     assert '"requestId": "original"' in result['content']
     assert '"proposalAccepted": true' in result['content']
     assert '"installationState": "not_observed"' in result['content']
-    assert inspect.await_args.kwargs['revision'] == proposal['commit']
+    assert proposal['commit'] in result['content']
+    inspect.assert_not_awaited()
     inspect.reset_mock()
     assert asyncio.run(extensions.chat_extension_request_context('other', 'chat', 'followup',
         'sim', include_evidence=True)) is None
