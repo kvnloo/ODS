@@ -34,6 +34,23 @@ test('a registry package alone is not the requested immutable source', () => {
     dockerfileInline: 'FROM python:3.12-slim\nRUN pip install unrelated\n'}), /checked-out repository source/);
 });
 
+test('Python packaging installs the pinned checkout and retains the explicit application command', () => {
+  const {dockerfile, healthPath, healthcheck, ...python} = source;
+  const command = ['python', '-c', 'from actual_package import PublicAPI'];
+  const recipe = compileSourceRecipe({...python, port:0, cliOnly:true, pythonVersion:'3.12', command});
+  const service = recipe.compose.services['example-project'];
+  assert.equal(service.build.context, source.repository + '.git#' + source.commit);
+  assert.match(service.build.dockerfile_inline, /^FROM python:3\.12-slim\n/);
+  assert.match(service.build.dockerfile_inline, /COPY \. \.\nRUN python -m pip install --no-cache-dir \. && python -m pip check/);
+  assert.deepEqual(service.command, command);
+  assert.equal(service.healthcheck, undefined);
+  for (const change of [{pythonVersion:'3.12\nRUN bad'}, {pythonVersion:'latest'},
+    {dockerfile:'Dockerfile'}, {dockerfileInline:'FROM python:3.12\nCOPY . .'}, {command:undefined}]) {
+    assert.throws(() => compileSourceRecipe({...python,port:0,cliOnly:true,pythonVersion:'3.12',command,...change}));
+  }
+  assert.throws(() => compileSourceRecipe({...source,dockerfile:undefined,pythonVersion:'3.12'}), /entrypoint/);
+});
+
 test('CLI verification does not invent a server, port or background process', () => {
   const {healthPath, healthcheck, ...cli} = source;
   const recipe = compileSourceRecipe({...cli, port: 0, cliOnly: true,

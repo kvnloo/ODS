@@ -35,6 +35,21 @@ test('rejects large proposals and ambiguous or changed receipts without echoing 
   }
 });
 
+test('wrong tool arguments return the actual schema without echoing submitted questions', async () => {
+  let submitted = false;
+  const tool = createExtensionProposalTool(context, {submit: async () => {submitted = true;}});
+  const result = await tool.execute('id', {questions:[{question:'private-user-text'}]});
+  const detail = JSON.parse(result.content[0].text);
+  assert.equal(result.isError, true);
+  assert.equal(detail.proposalSubmitted, false);
+  assert.deepEqual(detail.parameters.required, ['chatId','requestId','source']);
+  assert.deepEqual(detail.parameters.properties.source, tool.parameters.properties.source.description
+    ? Object.fromEntries(Object.entries(tool.parameters.properties.source).filter(([key]) => key !== 'description'))
+    : tool.parameters.properties.source);
+  assert.equal(submitted, false);
+  assert.ok(!result.content[0].text.includes('private-user-text'));
+});
+
 test('transport uses only fixed manager socket and accepts fragmented bounded frames', async () => {
   const socket = new EventEmitter();
   socket.destroy = () => {};
