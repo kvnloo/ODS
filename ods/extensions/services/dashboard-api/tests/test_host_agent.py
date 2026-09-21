@@ -25,6 +25,41 @@ sys.modules["ods_host_agent"] = _mod
 _spec.loader.exec_module(_mod)
 
 
+def test_core_recreation_excludes_unrelated_secrets_but_keeps_overlays_and_dependencies(tmp_path, monkeypatch):
+    monkeypatch.setattr(_mod, 'INSTALL_DIR', tmp_path)
+    monkeypatch.setattr(_mod, 'EXTENSIONS_DIR', tmp_path / 'extensions')
+    monkeypatch.setattr(_mod, 'USER_EXTENSIONS_DIR', tmp_path / 'user-extensions')
+    monkeypatch.setattr(_mod, 'CORE_SERVICE_IDS', {'litellm', 'open-webui'})
+    fragments = {
+        'extensions/unrelated/compose.yaml': 'services:\n  unrelated:\n    environment:\n      SECRET: ${UNRELATED_SECRET:?Required}\n',
+        'extensions/overlay/compose.yaml': 'services:\n  open-webui:\n    depends_on: [search]\n',
+        'extensions/overlay/compose.cpu.yaml': 'services:\n  helper:\n    image: helper:1\n',
+        'user-extensions/search/compose.yaml': 'services:\n  search:\n    network_mode: service:network\n',
+        'user-extensions/network/compose.yaml': 'services:\n  network:\n    image: network:1\n',
+    }
+    flags = ['-p', 'ods', '-f', 'base.yaml', '-f', 'gpu.yaml']
+    for name, body in fragments.items():
+        file = tmp_path / name
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_text(body)
+        flags += ['-f', name]
+    result = _mod._core_recreate_compose_flags(flags)
+    assert result == [value for value in flags[:6]] + sum(
+        (['-f', name] for name in fragments if '/unrelated/' not in name), [])
+    assert '${UNRELATED_SECRET:?Required}' in (tmp_path / next(iter(fragments))).read_text()
+
+
+def test_core_recreation_does_not_hide_invalid_extension_yaml(tmp_path, monkeypatch):
+    monkeypatch.setattr(_mod, 'INSTALL_DIR', tmp_path)
+    monkeypatch.setattr(_mod, 'EXTENSIONS_DIR', tmp_path / 'extensions')
+    monkeypatch.setattr(_mod, 'USER_EXTENSIONS_DIR', tmp_path / 'user-extensions')
+    file = tmp_path / 'extensions/broken/compose.yaml'
+    file.parent.mkdir(parents=True)
+    file.write_text('services: [unterminated')
+    with pytest.raises(ValueError, match='Invalid extension Compose YAML'):
+        _mod._core_recreate_compose_flags(['-f', str(file)])
+
+
 @pytest.mark.parametrize('exit_code,oom,success', [(0, False, True), (1, False, False), (0, True, False), (False, False, False)])
 def test_cli_success_requires_the_exact_container_exit_receipt(monkeypatch, exit_code, oom, success):
     calls = []

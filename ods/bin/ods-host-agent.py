@@ -5811,13 +5811,89 @@ def validate_core_recreate_ids(service_ids: list[str]) -> tuple[bool, str]:
     return True, ""
 
 
+def _core_recreate_compose_flags(flags: list[str]) -> list[str]:
+    """Exclude unrelated extension fragments before Compose interpolates them.
+
+    Preserve core overlays and whole extension fragment groups that contribute
+    to core services, including their service references. Missing configuration
+    in a selected fragment must still fail; never fill it with dummy secrets.
+    """
+    import yaml
+
+    roots = (EXTENSIONS_DIR.resolve(), USER_EXTENSIONS_DIR.resolve())
+    groups = {}
+    file_groups = {}
+    needed = set(CORE_SERVICE_IDS)
+    for index, flag in enumerate(flags[:-1]):
+        if flag != "-f":
+            continue
+        value = flags[index + 1]
+        path = Path(value)
+        if not path.is_absolute():
+            path = INSTALL_DIR / path
+        resolved = path.resolve()
+        group = None
+        for root in roots:
+            try:
+                relative = resolved.relative_to(root)
+            except ValueError:
+                continue
+            if len(relative.parts) > 1:
+                group = str(root / relative.parts[0])
+            break
+        if group is None:
+            continue
+        try:
+            document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as exc:
+            raise ValueError("Invalid extension Compose YAML during core recreation") from exc
+        if not isinstance(document, dict) or not isinstance(document.get("services"), dict):
+            raise ValueError("Invalid extension Compose fragment during core recreation")
+        services = document["services"]
+        names, references = groups.setdefault(group, (set(), set()))
+        names.update(services)
+        for service in services.values():
+            if not isinstance(service, dict):
+                continue
+            dependencies = service.get("depends_on", [])
+            if isinstance(dependencies, (dict, list)):
+                references.update(dependencies)
+            for key in ("network_mode", "ipc", "pid"):
+                reference = service.get(key)
+                if isinstance(reference, str) and reference.startswith("service:"):
+                    references.add(reference.removeprefix("service:"))
+            extends = service.get("extends")
+            if isinstance(extends, dict) and not extends.get("file") and isinstance(extends.get("service"), str):
+                references.add(extends["service"])
+            for key in ("links", "volumes_from"):
+                for reference in service.get(key, []) or []:
+                    if isinstance(reference, str) and not reference.startswith("container:"):
+                        references.add(reference.split(":", 1)[0])
+        file_groups[index] = group
+    selected = set()
+    while True:
+        additions = {group for group, (names, _) in groups.items() if names & needed} - selected
+        if not additions:
+            break
+        selected.update(additions)
+        for group in additions:
+            needed.update(groups[group][0])
+            needed.update(groups[group][1])
+    excluded = {index for index, group in file_groups.items() if group not in selected}
+    return [value for index, value in enumerate(flags)
+            if index not in excluded and index - 1 not in excluded]
+
+
 def docker_compose_recreate(service_ids: list[str]) -> tuple:
     """Force-recreate a set of allowed core services using the current compose stack."""
     ok, error = validate_core_recreate_ids(service_ids)
     if not ok:
         return False, error
 
-    flags = resolve_compose_flags()
+    try:
+        flags = _core_recreate_compose_flags(resolve_compose_flags())
+    except (OSError, ValueError) as exc:
+        return False, f"Could not resolve core Compose fragments: {exc}"
     cmd = ["docker", "compose"] + flags + ["up", "-d", "--no-deps", "--force-recreate"] + service_ids
     compose_env = os.environ.copy()
     for key in ("GGUF_FILE", "LLM_MODEL", "LEMONADE_MODEL", "MAX_CONTEXT", "CTX_SIZE"):
