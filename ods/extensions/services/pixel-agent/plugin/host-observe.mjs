@@ -410,6 +410,29 @@ export function createHostObserveTool({
 const EXTENSION_READ_BOUNDARY =
   "Read-only ODS extension discovery through the external Operations Broker. This receipt grants no authority to install, configure, or change an extension.";
 
+function extensionReadResult(receipt, action, target, serviceId) {
+  const result = toolResult(receipt);
+  if (receipt.waitTimedOut || receipt.waitCancelled) return result;
+  let failed = receipt.status !== 'succeeded';
+  if (!failed && action === 'inspect') {
+    const step = receipt.steps?.length === 1 ? receipt.steps[0] : undefined;
+    let inspection;
+    try { inspection = JSON.parse(step?.stdout); } catch { /* Unverified payload. */ }
+    failed = step?.target !== target || step?.action !== 'ods.extensions.inspect' ||
+      step?.exitCode !== 0 || step?.stderr !== '' ||
+      inspection?.schemaVersion !== 1 || inspection?.kind !== 'ods-pixel-extension-lifecycle' ||
+      inspection?.action !== 'inspect' || inspection?.extensionId !== serviceId ||
+      !['ready', 'inspected', 'blocked'].includes(inspection?.outcome);
+  }
+  if (!failed) return result;
+  // Broker completion only proves delivery of the lookup. Surface an inner
+  // lookup failure as a tool error while retaining its original job receipt.
+  const next = 'The lookup did not establish the extension state. Do not infer absence or retry an installation. ' +
+    'Catalog search/list can provide exact extension IDs; inspection requires an observed ID. ' +
+    'If the catalog is unavailable, report that uncertainty.';
+  return {...toolResult({...receipt, next}), isError: true};
+}
+
 export function createExtensionReadTool({ requestDir = REQUEST_DIR, resultDir, timeoutMs, pollIntervalMs } = {}) {
   return {
     name: "pixel_ods_extensions",
@@ -465,9 +488,9 @@ export function createExtensionReadTool({ requestDir = REQUEST_DIR, resultDir, t
         const receipt = await waitForTerminal(jobId, {
           resultDir, timeoutMs, pollIntervalMs, boundaryNotice: EXTENSION_READ_BOUNDARY, signal,
         });
-        return toolResult({ ...receipt, ...(receipt.waitTimedOut ? {
+        return extensionReadResult({ ...receipt, ...(receipt.waitTimedOut ? {
           next: "Read this existing job with pixel_ops_job_get or pixel_ops_job_wait; a wait timeout does not cancel the submitted read.",
-        } : {}) });
+        } : {}) }, params.action, target, params.serviceId);
       } catch {
         // A published request remains real work even if its result cannot be
         // read. Preserve its identity so the model can wait instead of resubmit.

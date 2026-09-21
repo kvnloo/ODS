@@ -22,6 +22,38 @@ async function publishResult(filename, value) {
   await rename(temporary, filename);
 }
 
+test('completed broker delivery preserves a failed inspection as a tool error', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pixel-extension-logical-error-'));
+  const requestDir = join(root, 'requests');
+  const resultDir = join(root, 'results');
+  await mkdir(requestDir); await mkdir(resultDir);
+  try {
+    const tool = createExtensionReadTool({requestDir, resultDir, timeoutMs:2000, pollIntervalMs:5});
+    const pending = tool.execute('inspect', {action:'inspect', serviceId:'unknown-name'});
+    let names = [];
+    for (let i=0; i<200 && names.length===0; i++) {
+      names = (await readdir(requestDir)).filter(name => name.endsWith('.json'));
+      if (!names.length) await delay(5);
+    }
+    assert.equal(names.length, 1);
+    const request = JSON.parse(await readFile(join(requestDir, names[0]), 'utf8'));
+    const receipt = {schemaVersion:2, jobId:request.jobId, status:'succeeded', steps:[{
+      stepId:'action', target:request.target, action:request.action, exitCode:0,
+      stdout:JSON.stringify({schemaVersion:1, kind:'ods-pixel-extension-lifecycle', action:'inspect',
+        extensionId:'unknown-name', outcome:'failed', currentStatus:'unknown'}), stderr:'',
+      outputTruncated:{stdout:false,stderr:false}, riskSignals:[],
+    }]};
+    await publishResult(join(resultDir, names[0]), receipt);
+    const result = await pending;
+    assert.equal(result.isError, true);
+    assert.equal(result.details.jobId, request.jobId);
+    assert.deepEqual(result.details.steps, receipt.steps);
+    assert.match(result.details.next, /did not establish/);
+    assert.match(result.details.next, /exact extension IDs/);
+    assert.equal((await readdir(requestDir)).filter(name=>name.endsWith('.json')).length, 1);
+  } finally { await rm(root, {recursive:true,force:true}); }
+});
+
 test("extension read keeps concurrent requests and broker results distinct", async () => {
   const root = await mkdtemp(join(tmpdir(), "pixel-extension-read-"));
   const requestDir = join(root, "requests");
