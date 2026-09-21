@@ -96,3 +96,14 @@ are useful but do not prove a local installation on every OS/GPU combination.
   available. Permanent lifecycle integration for this hybrid Windows/Docker
   Desktop plus WSL-native Portal setup remains outstanding; this temporary
   process does not prove restart persistence.
+- Added `pixel_ods_extension_request_prepare`, bound to the same original
+  conversation/request. It uses the existing cancellation-aware, immutable
+  preparation endpoint and returns a request-bound package receipt. It cannot
+  select another draft, install dependencies or start containers. Removed the
+  instruction that forced the agent to end immediately after saving a proposal.
+  Preparation and observation are now available without a second broker job;
+  host execution still uses its existing lifecycle boundary. Regression checks
+  cover API cancellation, identity validation and real manager HTTP transport.
+  This new preparation tool is not yet deployed locally or exercised against a
+  live upstream repository; isolated experimentation and managed execution
+  remain outstanding.

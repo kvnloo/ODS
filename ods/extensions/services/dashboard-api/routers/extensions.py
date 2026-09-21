@@ -1804,7 +1804,10 @@ async def extension_github_prepare_request(request: Request, api_key: str = Depe
             raise ValueError('No active proposal')
     except (ValueError, OSError, KeyError, TypeError):
         raise HTTPException(status_code=409, detail='Extension request has no active proposal') from None
-    return await _prepare_github_draft(current['proposal']['draftId'], api_key, request_identity=payload)
+    prepared = await _prepare_github_draft(current['proposal']['draftId'], api_key, request_identity=payload)
+    receipt = json.loads(prepared.body)
+    return JSONResponse({**receipt, 'kind': 'ods-extension-request-preparation', **payload,
+                         'draftId': current['proposal']['draftId']}, headers={'Cache-Control': 'no-store'})
 
 
 async def _prepare_github_draft(draft_id, api_key, *, request_identity=None):

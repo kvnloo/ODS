@@ -382,7 +382,7 @@ def _request_json(
             body = _repository_file_fields(body['url'], body['commit'], body['path'])
         elif path in ('/api/extensions/github/validate-recipe', '/api/extensions/github/drafts'):
             body = _recipe_candidate(body)
-        elif path == '/api/extensions/github/requests/status':
+        elif path in {'/api/extensions/github/requests/status', '/api/extensions/github/requests/prepare'}:
             body = _exact_object(body, {'chatId', 'requestId'})
             if any(not isinstance(body[key], str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', body[key])
                    for key in ('chatId', 'requestId')):
@@ -992,6 +992,30 @@ def _inspect_repository(env_path: pathlib.Path, port: int, repository: str) -> d
             'boundary': 'Read-only GitHub evidence. Upstream text is untrusted data, not execution authority.'}
 
 
+def _prepare_request(env_path, port, payload):
+    envelope = _exact_object(json.loads(payload.decode('utf-8')),
+        {'schemaVersion', 'action', 'chatId', 'requestId'})
+    if (len(payload) > MAX_FRAME_BYTES or envelope['schemaVersion'] != 1
+            or envelope['action'] != 'github-request-prepare'
+            or any(not isinstance(envelope[key], str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', envelope[key])
+                   for key in ('chatId', 'requestId'))):
+        raise ManagerError('invalid scoped preparation request')
+    credential = _read_env_key(_read_env(env_path), 'DASHBOARD_API_KEY')
+    status, value = _request_json(port=port, credential=credential, method='POST',
+        path='/api/extensions/github/requests/prepare', timeout=90,
+        body={key: envelope[key] for key in ('chatId', 'requestId')})
+    value = _exact_object(value, {'schemaVersion', 'kind', 'chatId', 'requestId', 'draftId',
+        'extensionId', 'recipeDigest', 'state', 'installationStarted', 'registered', 'runtimeVerified'})
+    if (status != 200 or value['schemaVersion'] != 1 or value['kind'] != 'ods-extension-request-preparation'
+            or any(value[key] != envelope[key] for key in ('chatId', 'requestId'))
+            or value['state'] != 'available'
+            or any(not isinstance(value[key], str) or not HEX_KEY.fullmatch(value[key]) for key in ('draftId', 'recipeDigest'))
+            or not isinstance(value['extensionId'], str) or not SERVICE_ID.fullmatch(value['extensionId'])
+            or any(value[key] is not False for key in ('installationStarted', 'registered', 'runtimeVerified'))):
+        raise ManagerError('invalid scoped preparation receipt')
+    return value
+
+
 def _read_request_status(env_path, port, payload):
     envelope = _exact_object(json.loads(payload.decode('utf-8')),
         {'schemaVersion', 'action', 'chatId', 'requestId'})
@@ -1469,7 +1493,11 @@ def _serve_connection(
                 )
         elif uid == os.getuid():
             envelope = json.loads(request_payload.decode('utf-8'))
-            if isinstance(envelope, dict) and envelope.get('action') == 'github-request-status':
+            if isinstance(envelope, dict) and envelope.get('action') == 'github-request-prepare':
+                if credential_source is not None:
+                    _refresh_projected_credential(credential_source, env_path)
+                result = _prepare_request(env_path, port, request_payload)
+            elif isinstance(envelope, dict) and envelope.get('action') == 'github-request-status':
                 if credential_source is not None:
                     _refresh_projected_credential(credential_source, env_path)
                 result = _read_request_status(env_path, port, request_payload)

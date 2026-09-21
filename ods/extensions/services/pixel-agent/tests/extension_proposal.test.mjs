@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';
-import {createExtensionProposalTool, createPythonLibraryProposalTool, createExtensionRequestStatusTool, submitExtensionProposal} from '../plugin/extension-proposal.mjs';
+import {createExtensionProposalTool, createPythonLibraryProposalTool, createExtensionRequestStatusTool, createExtensionRequestPrepareTool, submitExtensionProposal} from '../plugin/extension-proposal.mjs';
 
 const context = {agentId: 'pixel', sessionKey: 'agent:pixel:openai-user:ods-' + createHash('sha256').update('chat').digest('hex')};
 const args = {chatId: 'chat', requestId: 'turn', candidate: {repository: 'https://github.com/o/r',
@@ -27,6 +27,25 @@ test('request status is owner-bound, read-only and never promotes missing eviden
   assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).details.runtimeStatus,'enabled');
   value.requestId='other';
   assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).isError,true);
+});
+
+test('preparation uses only the bound request and does not claim an installation', async () => {
+  const value={schemaVersion:1,kind:'ods-extension-request-preparation',chatId:'chat',requestId:'turn',
+    draftId:'a'.repeat(64),recipeDigest:'b'.repeat(64),extensionId:'example',state:'available',
+    installationStarted:false,registered:false,runtimeVerified:false};
+  const calls=[];
+  const tool=createExtensionRequestPrepareTool(context,{submit:async payload=>{calls.push(payload);return value;}});
+  assert.equal(createExtensionRequestPrepareTool({...context,agentId:'other'}),null);
+  for (const input of [{chatId:'other',requestId:'turn'},{chatId:'chat',requestId:'turn',repository:'https://github.com/other/repo'}]) {
+    assert.equal((await tool.execute('id',input)).isError,true);
+  }
+  assert.equal(calls.length,0);
+  assert.deepEqual((await tool.execute('id',{chatId:'chat',requestId:'turn'})).details,value);
+  assert.deepEqual(calls[0],{schemaVersion:1,action:'github-request-prepare',chatId:'chat',requestId:'turn'});
+  for (const change of [{runtimeVerified:true},{requestId:'other'},{recipeDigest:'bad'}]) {
+    const invalid=createExtensionRequestPrepareTool(context,{submit:async()=>({...value,...change})});
+    assert.equal((await invalid.execute('id',{chatId:'chat',requestId:'turn'})).isError,true);
+  }
 });
 
 test('only Portal sessions can submit proposals for their own conversation', async () => {

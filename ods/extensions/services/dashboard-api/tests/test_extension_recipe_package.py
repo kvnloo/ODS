@@ -50,6 +50,9 @@ def test_request_preparation_rechecks_scope_after_upstream_lookup(monkeypatch, t
         assert failure.value.status_code == 409 and not list(library.iterdir())
     else:
         result = json.loads(asyncio.run(extensions.extension_github_prepare_request(request(), api_key='owner')).body)
+        assert result['kind'] == 'ods-extension-request-preparation'
+        assert result['chatId'] == 'chat' and result['requestId'] == 'turn'
+        assert result['draftId'] == draft['draftId']
         assert result['extensionId'] == 'apache-answer' and result['state'] == 'available'
         assert result['installationStarted'] is False
         assert (library / 'apache-answer/manifest.yaml').is_file()

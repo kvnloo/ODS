@@ -69,6 +69,33 @@ export function createPythonLibraryProposalTool(context, dependencies = {}) {
   };
 }
 
+export function createExtensionRequestPrepareTool(context, {submit = submitExtensionProposal} = {}) {
+  if (!createExtensionRequestStatusTool(context)) return null;
+  return {
+    name:'pixel_ods_extension_request_prepare', label:'Prepare managed extension recipe',
+    description:'Prepare the accepted GitHub proposal for this conversation in the ODS extension library. Use the original chatId/requestId from request context. Revalidates its exact saved recipe and source revision; repeating preparation recovers the identical package. Does not install dependencies, start containers or prove runtime readiness. Use when the owner requests preparing or installing this integration; research alone does not request preparation.',
+    parameters:{type:'object',additionalProperties:false,required:['chatId','requestId'],properties:{
+      chatId:{type:'string',pattern:'^[A-Za-z0-9_-]{1,128}$'},
+      requestId:{type:'string',pattern:'^[A-Za-z0-9_-]{1,128}$'},
+    }},
+    async execute(_id,args) {
+      const unavailable={isError:true,content:[{type:'text',text:'Preparation was not confirmed. Inspect this request with pixel_ods_extension_request_status before continuing; no runtime success is established.'}]};
+      if (!exact(args,['chatId','requestId']) || ![args.chatId,args.requestId].every(x=>typeof x==='string' && ID.test(x))
+          || context.sessionKey !== PREFIX+createHash('sha256').update(args.chatId).digest('hex')) return unavailable;
+      try {
+        const value=await submit({schemaVersion:1,action:'github-request-prepare',...args});
+        if (!exact(value,['schemaVersion','kind','chatId','requestId','draftId','extensionId','recipeDigest','state','installationStarted','registered','runtimeVerified'])
+            || value.schemaVersion!==1 || value.kind!=='ods-extension-request-preparation'
+            || value.chatId!==args.chatId || value.requestId!==args.requestId || value.state!=='available'
+            || ![value.draftId,value.recipeDigest].every(x=>typeof x==='string' && /^[a-f0-9]{64}$/.test(x))
+            || typeof value.extensionId!=='string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(value.extensionId)
+            || ['installationStarted','registered','runtimeVerified'].some(key=>value[key]!==false)) return unavailable;
+        return {content:[{type:'text',text:JSON.stringify(value)}],details:value};
+      } catch {return unavailable;}
+    },
+  };
+}
+
 // This channel can only bind a proposal to an existing owner request. It has
 // no lifecycle operation, arbitrary URL, shell command or credential parameter.
 export function submitExtensionProposal(payload, {connect = net.createConnection, platform = process.platform} = {}) {
@@ -82,7 +109,7 @@ export function submitExtensionProposal(payload, {connect = net.createConnection
       socket.destroy();
       if (error) reject(new Error('Extension proposal unavailable')); else resolve(value);
     };
-    const timer = setTimeout(() => finish(true), 45000);
+    const timer = setTimeout(() => finish(true), payload?.action === 'github-request-prepare' ? 105000 : 45000);
     socket.on('connect', () => socket.write(JSON.stringify(payload) + '\n'));
     socket.on('error', () => finish(true));
     socket.on('end', () => finish(true));
@@ -191,7 +218,7 @@ export function createExtensionProposalTool(context, {submit = submitExtensionPr
             || result.proposal?.extensionId !== args.candidate.manifest?.service?.id) return error;
         return {content: [{type: 'text', text: JSON.stringify({schemaVersion: 1, state: 'draft',
           proposal: result.proposal, installationStarted: false, registered: false,
-          next: 'The proposal was accepted. Finish this response with a short factual handoff. The chat installation coordinator now owns preparation, configuration and installation status. Do not call this tool again or start a second installation.',
+          next: 'The proposal was accepted, not installed. Inspect it with pixel_ods_extension_request_status or prepare its managed recipe with pixel_ods_extension_request_prepare using the same chatId/requestId when the owner requested installation. Preparation is idempotent and shared with the UI coordinator. Do not submit a replacement or start an unmanaged copy.',
         })}]};
       } catch { return error; }
     },
