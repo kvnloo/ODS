@@ -49,6 +49,14 @@ operation already accepted by the host may still finish. ODS preserves uncertain
 operation records instead of repeating a download or start request after a lost
 acknowledgement. Viewing saved conversation history does not start installation.
 
+When a successful current request has an identified Playground project, Portal
+continues with a real model turn to apply the requested integration to existing
+project files. After a reload, a saved pending integration offers **Continue
+integration**: it checks current readiness without replaying installation.
+The continuation has a stable request ID so duplicate tabs use the retained
+chat request boundary. A dispatched continuation is not a claim that project
+code integration succeeded; its model result still needs to be assessed.
+
 For use inside a project, the extension inspection tool exposes documentation
 and declared connection fields from the installed recipe first. These defaults
 do not prove an endpoint is reachable. The model must inspect the actual project

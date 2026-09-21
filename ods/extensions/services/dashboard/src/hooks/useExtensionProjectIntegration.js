@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { readIntegrationRecovery, saveIntegrationRecovery, readyIntegrationPlan, integrationRequestId } from '../lib/extensionIntegrationRecovery'
 
 export function integrationRequest(installation, command, project, chatId) {
   if (typeof command !== 'string' || installation?.state !== 'succeeded' || installation.command !== command ||
@@ -19,16 +20,61 @@ export function integrationRequest(installation, command, project, chatId) {
 export default function useExtensionProjectIntegration({ chatId, installation, command, project, idle, sendMessage }) {
   const handled = useRef(new Set())
   const scope = useRef(chatId)
+  const latest = useRef(null)
+  const check = useRef(null)
+  const [recovery, setRecovery] = useState(null)
+  latest.current = {chatId, command, project, idle, sendMessage}
+  useEffect(() => () => check.current?.abort(), [chatId, command, project])
+  const dispatch = useCallback(record => {
+    const context = latest.current
+    if (!context.idle || context.chatId !== record.chatId || context.command !== record.command || context.project !== record.project) return
+    const key = JSON.stringify([record.chatId, record.requestId, record.target, record.project])
+    if (handled.current.has(key) || readIntegrationRecovery(record.chatId)?.phase === 'dispatched') return
+    if (!saveIntegrationRecovery({...record, phase: 'dispatched'})) {
+      setRecovery({...record, error: 'Could not save continuation state. No request was sent.'})
+      return
+    }
+    handled.current.add(key)
+    setRecovery(null)
+    void context.sendMessage(integrationRequest({...record, state: 'succeeded'}, record.command, record.project, record.chatId), integrationRequestId(record))
+  }, [])
   useEffect(() => {
     if (scope.current !== chatId) { handled.current.clear(); scope.current = chatId }
-    const request = integrationRequest(installation, command, project, chatId)
-    if (!idle || !request) return
-    const key = JSON.stringify([chatId, installation.requestId || command, installation.target, project])
-    if (handled.current.has(key)) return
-    // Mark before invoking the sender: React rerenders/StrictMode must not
-    // enqueue a second model turn. Historical conversations have no live
-    // successful installation receipt and never reach this point.
-    handled.current.add(key)
-    void sendMessage(request)
-  }, [chatId, installation, command, project, idle, sendMessage])
+    let record = readIntegrationRecovery(chatId)
+    const eligible = ['pending', 'succeeded'].includes(installation?.state) &&
+      integrationRequest({...installation, state: 'succeeded'}, command, project, chatId)
+    if (eligible) {
+      if (record?.requestId !== installation.requestId) {
+        record = {version: 1, chatId, command, project, target: installation.target,
+          requestId: installation.requestId, phase: 'pending'}
+        if (!saveIntegrationRecovery(record)) {
+          setRecovery({...record, error: 'Could not save continuation state. No request was sent.'})
+          return
+        }
+      }
+      if (installation.state === 'succeeded' && record.phase === 'pending') dispatch(record)
+      return
+    }
+    // Reading historical conversations never starts a model or host action.
+    setRecovery(record?.phase === 'pending' && record.command === command && record.project === project ? record : null)
+  }, [chatId, installation, command, project, idle, sendMessage, dispatch])
+  const resume = useCallback(async () => {
+    const context = latest.current
+    const record = readIntegrationRecovery(context.chatId)
+    if (!context.idle || record?.phase !== 'pending' || record.command !== context.command || record.project !== context.project || check.current) return
+    const controller = new AbortController()
+    check.current = controller
+    setRecovery({...record, checking: true})
+    const timeout = setTimeout(() => controller.abort(), 15000)
+    try {
+      const response = await fetch(`/api/extensions/${record.target}/install-plan`, {signal: controller.signal, cache: 'no-store'})
+      if (!response.ok || !readyIntegrationPlan(await response.json(), record.target)) throw new Error('not ready')
+      if (!controller.signal.aborted) dispatch(record)
+    } catch {
+      if (latest.current.chatId === record.chatId && latest.current.command === record.command && latest.current.project === record.project) {
+        setRecovery({...record, error: 'Extension readiness could not be confirmed. No new installation was requested.'})
+      }
+    } finally { clearTimeout(timeout); if (check.current === controller) check.current = null }
+  }, [dispatch])
+  return {recovery, resume}
 }

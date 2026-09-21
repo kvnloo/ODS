@@ -885,7 +885,7 @@ export default function Pixel({ systemStatus = null }) {
     }
   }, [messages, preview, workspaceOpen, sending, interrupted, input])
 
-  const sendMessage = useCallback(async (answerOverride) => {
+  const sendMessage = useCallback(async (answerOverride, continuationId = null) => {
     const trimmed = (typeof answerOverride === 'string' ? answerOverride : input).trim()
     if(compactCommand(trimmed)){await compactConversation();return}
     if(contextControl.busy || contextControl.historyUnknown)return
@@ -937,6 +937,7 @@ export default function Pixel({ systemStatus = null }) {
     const isCurrentTurn = () => !controller.signal.aborted && abortRef.current === controller
     let latestAssistantText = ''
     let extensionInstallationStarted = false
+    let streamAttemptCount = 0
 
     async function streamAttempt(chatId, attemptConversation, snapshot) {
       let reader
@@ -949,7 +950,8 @@ export default function Pixel({ systemStatus = null }) {
       let questions = null
 
       try {
-        const requestId = makeChatId()
+        const requestId = streamAttemptCount++ === 0 && typeof continuationId === 'string' && SAFE_CHAT_ID.test(continuationId)
+          ? continuationId : makeChatId()
         const body=JSON.stringify({chat_id:chatId,request_id:requestId,messages:attemptConversation,history_snapshot:snapshot})
         if(new TextEncoder().encode(body).byteLength>8*1024*1024)throw new Error('history-request-too-large')
         requestIdRef.current = requestId
@@ -1358,7 +1360,7 @@ export default function Pixel({ systemStatus = null }) {
   const inputEmpty = !(command?.task ?? goalDraft?.task ?? input).trim()
   const isDisabled = sending || modelSwitching || restoredActive || restoredChecking || stopping || teams.busy || contextControl.busy || contextControl.historyUnknown || status !== 'available'
   const integrationCommand = [...messages].reverse().find(message => message.role === 'user')?.content
-  useExtensionProjectIntegration({
+  const {recovery: integrationRecovery, resume: resumeProjectIntegration} = useExtensionProjectIntegration({
     chatId: chatIdRef.current,
     installation: githubExtensionInstallation?.command === integrationCommand ? githubExtensionInstallation : extensionInstallation,
     command: integrationCommand,
@@ -1560,6 +1562,12 @@ export default function Pixel({ systemStatus = null }) {
                   installation={githubExtensionInstallation?.command === messages[index - 1].content ? githubExtensionInstallation : extensionInstallation}
                   onStopInstallation={githubExtensionInstallation?.command === messages[index - 1].content ? stopGithubExtensionInstallation : stopExtensionInstallation}
                   projectPath={conversationProject({messages, preview})?.path}/>}
+              {message.role === 'assistant' && index === messages.length - 1 && integrationRecovery &&
+                <section className="portal-extension-progress" aria-label="Project integration recovery">
+                  <p role="status">{integrationRecovery.error || `Integration of @${integrationRecovery.target} into ${integrationRecovery.project} is pending.`}</p>
+                  <button type="button" disabled={isDisabled || Boolean(input.trim()) || integrationRecovery.checking}
+                    onClick={resumeProjectIntegration}>{integrationRecovery.checking ? 'Checking readiness…' : 'Continue integration'}</button>
+                </section>}
               {message.role === 'assistant' && message.status === 'done' && index === messages.length - 1 &&
                 messages[index - 1]?.role === 'user' && <PortalExtensionSetup key={`${chatIdRef.current}/${index}`}
                   command={messages[index - 1].content} disabled={isDisabled || sending || restoredActive || restoredChecking}
