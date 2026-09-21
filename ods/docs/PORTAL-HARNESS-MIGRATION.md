@@ -104,6 +104,23 @@ are useful but do not prove a local installation on every OS/GPU combination.
   Preparation and observation are now available without a second broker job;
   host execution still uses its existing lifecycle boundary. Regression checks
   cover API cancellation, identity validation and real manager HTTP transport.
-  This new preparation tool is not yet deployed locally or exercised against a
-  live upstream repository; isolated experimentation and managed execution
-  remain outstanding.
+  Local deployment and a native-tool → manager → API probe against the real
+  `pallets/itsdangerous` repository succeeded at commit
+  `672971d66a2ef9f85151e53283113f33d642dabd`. The bound package was prepared;
+  status correctly remained `not_installed`. This was a direct tool probe,
+  not proof of autonomous model tool selection.
+
+- Real host installation testing exposed a Windows Docker Compose 5.0.2 /
+  Buildx 0.31.1 failure: Compose passed the remote Git context as an `fs.read`
+  entitlement; Buildx tried to resolve `https:` as a Windows filesystem path.
+  Remote Windows builds now compile the selected Compose targets with
+  `build --print` and pass the unchanged plan to Buildx, without synthetic
+  filesystem grants. Local builds and non-Windows hosts retain their path.
+  Failed builds are not automatically replayed. Eleven focused regression
+  cases passed. The corrected helper built the real pinned image successfully.
+  An isolated, network-disabled container signed and decoded a payload and
+  rejected a tampered token using ItsDangerous. The original managed install
+  still has a failed-build receipt; this image check is not an installed ODS
+  extension. Failed-operation reconciliation and model-driven verification
+  remain outstanding. The host-agent patch is also in the local installation
+  and retained deployment source; macOS/Linux execution was not tested here.

@@ -54,6 +54,7 @@ def test_cli_running_is_not_a_successful_one_shot_exit(monkeypatch):
 
 @pytest.mark.parametrize('build_exit', [0, 1])
 def test_install_prepares_only_dependency_images_and_surfaces_build_failure(monkeypatch, build_exit):
+    monkeypatch.setattr(_mod.platform, 'system', lambda: 'Linux')
     config = {'services': {
         'demo': {'build': {'context': 'https://github.com/example/demo.git#' + 'a' * 40},
                  'image': 'ods-source-demo:local', 'depends_on': {'demo-db': {}, 'demo-worker': {}}},
@@ -75,6 +76,42 @@ def test_install_prepares_only_dependency_images_and_surfaces_build_failure(monk
     assert calls == [base + ['config', '--format', 'json'], base + ['pull', 'demo-db'],
                      base + ['build', 'demo', 'demo-worker']]
     assert progress[-1][2] == 'Building images from source...'
+
+
+@pytest.mark.parametrize('build_exit', [0, 1])
+def test_windows_remote_build_uses_compose_plan_without_url_file_entitlement(monkeypatch, build_exit):
+    monkeypatch.setattr(_mod.platform, 'system', lambda: 'Windows')
+    plan = json.dumps({'target': {'demo': {
+        'context': 'https://github.com/example/demo.git#' + 'a' * 40,
+        'dockerfile-inline': 'FROM scratch', 'tags': ['ods-source-demo:fixed'],
+        'args': {'OPTION': 'value'}, 'platforms': ['linux/arm64']}}})
+    calls = []
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return types.SimpleNamespace(returncode=0 if '--print' in command else build_exit,
+                                     stdout=plan, stderr='')
+    monkeypatch.setattr(_mod.subprocess, 'run', run)
+    result = _mod._build_install_sources(['docker', 'compose', '-f', 'overlay.yaml'],
+        ['demo'], {'demo': {'build': {'context': 'https://github.com/example/demo.git'}}})
+    assert result.returncode == build_exit
+    assert calls[0][0] == ['docker', 'compose', '-f', 'overlay.yaml', 'build', '--print', 'demo']
+    assert calls[1][0] == ['docker', 'buildx', 'bake', '--file', '-', '--load', '--progress', 'plain', 'demo']
+    assert calls[1][1]['input'] == plan
+    assert len(calls) == 2  # Never replay a failed Dockerfile build.
+
+
+@pytest.mark.parametrize('output,code', [('{}', 0), ('invalid', 0), ('', 1)])
+def test_windows_invalid_or_unsupported_compose_plan_never_builds(monkeypatch, output, code):
+    monkeypatch.setattr(_mod.platform, 'system', lambda: 'Windows')
+    calls = []
+    def run(command, **kwargs):
+        calls.append(command)
+        return types.SimpleNamespace(returncode=code, stdout=output, stderr='')
+    monkeypatch.setattr(_mod.subprocess, 'run', run)
+    result = _mod._build_install_sources(['docker', 'compose'], ['demo'],
+        {'demo': {'build': {'context': 'https://github.com/example/demo.git'}}})
+    assert result.returncode != 0
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize('services', [{}, {'demo': {'depends_on': ['missing'], 'image': 'demo:1'}},

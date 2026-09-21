@@ -7078,6 +7078,41 @@ def _verify_one_shot_exit(flags: list[str], service_id: str, timeout: int = 60) 
     return False, 'The CLI verification command did not reach a confirmed successful exit.'
 
 
+def _build_install_sources(base, builds, services):
+    """Keep Compose's resolved build plan without treating remote URLs as files.
+
+    Compose 5 on Windows emits an fs.read entitlement for a Git URL. Buildx
+    interprets that entitlement as a Windows path and fails before building.
+    Compile the same selected targets with Compose, then execute that plan
+    directly. Do not grant wildcard filesystem entitlements or rebuild images
+    after a failed build (which may already have executed Dockerfile steps).
+    """
+    remote = any(
+        isinstance(services[name].get('build'), dict)
+        and urlparse(str(services[name]['build'].get('context', ''))).scheme
+        in ('https', 'http', 'git', 'ssh')
+        for name in builds
+    )
+    options = dict(cwd=str(INSTALL_DIR), capture_output=True, text=True,
+                   timeout=SUBPROCESS_TIMEOUT_START)
+    if platform.system() != 'Windows' or not remote:
+        return subprocess.run(base + ['build', *sorted(builds)], **options)
+    compiled = subprocess.run(base + ['build', '--print', *sorted(builds)], **options)
+    if compiled.returncode:
+        return compiled
+    try:
+        plan = json.loads(compiled.stdout)
+        if not isinstance(plan, dict) or not isinstance(plan.get('target'), dict):
+            raise ValueError()
+        if not all(name in plan['target'] for name in builds):
+            raise ValueError()
+    except (ValueError, TypeError):
+        return subprocess.CompletedProcess(base, 1, '', 'Invalid Compose build plan')
+    return subprocess.run(
+        ['docker', 'buildx', 'bake', '--file', '-', '--load', '--progress', 'plain',
+         *sorted(builds)], input=compiled.stdout, **options)
+
+
 def _prepare_install_images(flags: list[str], service_id: str) -> tuple[bool, str]:
     """Prepare only the requested service's effective Compose dependency graph.
 
@@ -7131,8 +7166,7 @@ def _prepare_install_images(flags: list[str], service_id: str) -> tuple[bool, st
             logger.warning("Image pull failed for %s; checking cached images at startup", service_id)
     if builds:
         _write_progress(service_id, "pulling", "Building images from source...")
-        result = subprocess.run(base + ["build", *sorted(builds)], cwd=str(INSTALL_DIR),
-                                capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT_START)
+        result = _build_install_sources(base, builds, services)
         if result.returncode:
             return False, "Source image build failed; containers were not started"
     return True, ""
