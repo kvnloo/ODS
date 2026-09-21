@@ -382,6 +382,11 @@ def _request_json(
             body = _repository_file_fields(body['url'], body['commit'], body['path'])
         elif path in ('/api/extensions/github/validate-recipe', '/api/extensions/github/drafts'):
             body = _recipe_candidate(body)
+        elif path == '/api/extensions/github/requests/status':
+            body = _exact_object(body, {'chatId', 'requestId'})
+            if any(not isinstance(body[key], str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', body[key])
+                   for key in ('chatId', 'requestId')):
+                raise ManagerError('invalid request-scoped status identity')
         elif path == '/api/extensions/github/requests/proposal':
             body = _exact_object(body, {'chatId', 'requestId', 'candidate'})
             if any(not isinstance(body[key], str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', body[key])

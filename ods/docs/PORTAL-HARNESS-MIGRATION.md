@@ -85,5 +85,14 @@ are useful but do not prove a local installation on every OS/GPU combination.
   the existing Unix manager channel. It performs no lifecycle mutations and
   exposes no credentials or raw application configuration. Unavailable runtime
   observations remain `not_observed`; proposals never imply readiness. API,
-  plugin and WSL manager regression checks pass. Live deployment and real model
-  use of this new tool remain to be verified.
+  plugin and WSL manager regression checks pass. Local deployment and a direct
+  native-tool → Unix manager → HTTP API read succeeded: the previous test
+  request correctly reported `expired` and `not_observed`, with no installation
+  side effects. This found and fixed a missing internal HTTP route allowance;
+  the regression now exercises actual HTTP transport. Real model selection and
+  use of the tool remain to be verified.
+- After the local environment restarted, WSL services restarted between client
+  invocations. A supervised WSL lifetime client keeps this development session
+  available. Permanent lifecycle integration for this hybrid Windows/Docker
+  Desktop plus WSL-native Portal setup remains outstanding; this temporary
+  process does not prove restart persistence.
