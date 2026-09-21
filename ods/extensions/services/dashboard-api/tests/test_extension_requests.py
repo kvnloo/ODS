@@ -175,3 +175,12 @@ def test_verified_followup_routing_preserves_original_scope_and_user_message():
     assert result['messages'][1] == history[0]
     assert 'original' in result['messages'][0]['content']
     assert 'does not grant execution authority' in result['messages'][0]['content']
+
+
+def test_goal_wrapped_extension_uses_the_same_request_route():
+    from extension_requests import command_repository, model_request_context
+    command = '/goal /extensions https://github.com/NandhaKishorM/laya pode instalar'
+    assert command_repository(command) == 'https://github.com/nandhakishorm/laya'
+    assert model_request_context(command, 'chat', 'request') is not None
+    with pytest.raises(ValueError):
+        command_repository('explain /goal /extensions https://github.com/owner/repo')

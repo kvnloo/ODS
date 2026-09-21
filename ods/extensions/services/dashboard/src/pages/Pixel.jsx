@@ -893,7 +893,11 @@ export default function Pixel({ systemStatus = null }) {
     if(teams.busy)return
     if(goalCommand(trimmed) && !goalCommand(trimmed).task) { setStopError('Describe the goal you want to complete.'); return }
     const requestedGoal=goalCommand(trimmed)
-    const teamCommand=agentCommand(trimmed) || requestedGoal
+    // Extension installation already has a durable coordinator. Sending this
+    // command to a separate goal agent bypasses request registration and the
+    // configuration/progress UI, leaving only sandbox commands available.
+    const extensionGoal=requestedGoal && /^\/extensions?(?:\s|$)/i.test(requestedGoal.task)
+    const teamCommand=agentCommand(trimmed) || (extensionGoal ? null : requestedGoal)
     if(teamCommand) {
       if(!teamCommand.task || teamCommand.task.length>8000){setStopError('Describe what you want the team to do, in up to 8,000 characters.');return}
       const signature=JSON.stringify([chatIdRef.current,trimmed])

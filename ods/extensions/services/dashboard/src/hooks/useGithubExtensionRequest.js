@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { advanceCatalogInstallation } from './useExtensionInstallation'
 
 export function githubExtensionRepository(command) {
-  const match = typeof command === 'string' && command.trim().match(/^\/extensions?\s+(https:\/\/github\.com\/[^\s]+)(?:\s|$)/i)
+  const match = typeof command === 'string' && command.trim().match(/^(?:\/goal\s+)?\/extensions?\s+(https:\/\/github\.com\/[^\s]+)(?:\s|$)/i)
   if (!match) return null
   try {
     const url = new URL(match[1])

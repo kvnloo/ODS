@@ -3,7 +3,7 @@ import './portal-extension-setup.css'
 
 export function extensionSetupTarget(command) {
   return typeof command === 'string'
-    ? /^[ \t]*\/extensions?[ \t]+@([a-z0-9][a-z0-9_-]{0,63})(?:[ \t]+[^\r\n@;|&`]*?)?[ \t]*$/i.exec(command)?.[1]?.toLowerCase()
+    ? /^[ \t]*(?:\/goal[ \t]+)?\/extensions?[ \t]+@([a-z0-9][a-z0-9_-]{0,63})(?:[ \t]+[^\r\n@;|&`]*?)?[ \t]*$/i.exec(command)?.[1]?.toLowerCase()
     : undefined
 }
 

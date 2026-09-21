@@ -20,7 +20,7 @@ TTL_SECONDS = 6 * 60 * 60
 def command_repository(command):
     if not isinstance(command, str) or len(command) > 16384:
         raise ValueError('Invalid extension command')
-    match = re.match(r'^/extensions?\s+(https://github\.com/[^\s]+)(?:\s|$)', command.strip(), re.IGNORECASE)
+    match = re.match(r'^(?:/goal\s+)?/extensions?\s+(https://github\.com/[^\s]+)(?:\s|$)', command.strip(), re.IGNORECASE)
     if not match:
         raise ValueError('An explicit GitHub extension command is required')
     return 'https://github.com/' + repository_identity(match.group(1)).lower()

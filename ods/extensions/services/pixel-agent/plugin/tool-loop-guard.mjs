@@ -4678,7 +4678,7 @@ export function userMessageExtensionLifecycleIntent(messages, prompt = undefined
   // same-line usage request in the original model prompt; it is not a host
   // command or authority to mutate another extension. Quoted examples,
   // multiple mentions and compound commands remain outside this shorthand.
-  const command = text.match(/^[ \t]*\/extensions?[ \t]+@([a-z0-9][a-z0-9_-]{0,63})(?:[ \t]+[^\r\n@;|&`]*?)?[ \t]*$/i);
+  const command = text.match(/^[ \t]*(?:\/goal[ \t]+)?\/extensions?[ \t]+@([a-z0-9][a-z0-9_-]{0,63})(?:[ \t]+[^\r\n@;|&`]*?)?[ \t]*$/i);
   if (command) return { action: "install-next", serviceId: command[1].toLowerCase() };
   // Do not reinterpret a malformed slash request as an unrelated natural
   // language action found in its trailing text.

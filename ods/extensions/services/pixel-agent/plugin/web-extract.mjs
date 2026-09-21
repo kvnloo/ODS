@@ -245,11 +245,16 @@ export function createPublicWebExtractTool({
       let url;
       let query;
       try {
-        url = normalizedPublicUrl(params?.url);
+        // Smaller models sometimes put the sole page URL in query. This
+        // unambiguous alias still passes the same URL and SSRF validation;
+        // never reinterpret a search phrase or override an explicit URL.
+        const queryIsUrl = params?.url === undefined && params?.identifier === undefined &&
+          typeof params?.query === "string" && /^https?:\/\/\S+$/i.test(params.query);
+        url = normalizedPublicUrl(queryIsUrl ? params.query : params?.url);
         // Some tool-call transports let the model use the descriptive noun
         // "identifier" as the field name. Normalize that one unambiguous
         // alias; an explicitly supplied query must still validate as written.
-        const requestedQuery = params?.query === undefined ? params?.identifier : params.query;
+        const requestedQuery = queryIsUrl ? undefined : params?.query === undefined ? params?.identifier : params.query;
         query = requestedQuery === undefined ? undefined : normalizedQuery(requestedQuery);
       } catch (error) {
         return textResult(`Pixel blocked targeted web extraction: ${error.message}`, {
