@@ -5256,6 +5256,33 @@ test("renders a strictly validated live extension inventory receipt", () => {
   assert.match(text, /grants no installation, configuration, credential, Docker, or shell authority/);
 });
 
+for (const inflatedCount of [false, true]) {
+  test(`inventory keeps pending and failed installations distinct: inflated=${inflatedCount}`, () => {
+    const guard = createToolLoopGuard();
+    guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel",
+      { prompt: "List installed ODS extensions." });
+    const action = "ods.extensions.list";
+    const step = discoveryStep(action);
+    const result = JSON.parse(step.stdout);
+    result.extensions = ["installing", "setting_up", "error"].map(status => ({
+      id: status, name: status, category: "tools", status, source: "user", installable: true,
+    }));
+    Object.assign(result.summary, { total: 3, installed: inflatedCount ? 3 : 0, installing: 1, settingUp: 1, error: 1 });
+    step.stdout = JSON.stringify(result) + "\n";
+    recordDiscovery(guard, { target: "ods-host", action }, "ops-1234567890123-abcdef123456", "succeeded", [step]);
+    const text = reply(guard)?.payload?.text || "";
+    if (inflatedCount) {
+      assert.doesNotMatch(text, /Catalog total: 3; installed: 3/);
+      assert.doesNotMatch(text, new RegExp(OPERATIONS_EXTENSION_INVENTORY_EVIDENCE_PREFIX));
+    } else {
+      assert.match(text, /Catalog total: 3; installed: 0/);
+      assert.match(text, /Installation not confirmed: installing 1; setting up 1; error 1/);
+      assert.match(text, /Installed extensions: none/);
+      assert.match(text, /status `setting_up`/);
+    }
+  });
+}
+
 test("extension catalog permits independent projections but does not grant unrelated broker actions", () => {
   const guard = createToolLoopGuard();
   guard.observeRun(
@@ -5409,6 +5436,38 @@ test("renders a strictly validated extension catalog receipt instead of host evi
   assert.match(text, /Installed\/enabled state: not included/);
   assert.match(text, /no installation or configuration authority/);
   assert.doesNotMatch(text, /host facts/);
+});
+
+test("extension slash commands require inspection before installation and reject quoted examples", () => {
+  for (const prompt of ['/extension @docling-serve', '/extensions @docling-serve', '/EXTENSION @DOCLING-SERVE']) {
+    assert.deepEqual(userMessageExtensionLifecycleIntent([], prompt), { action: 'install-next', serviceId: 'docling-serve' });
+    assert.deepEqual(userMessageOperationsRequirements([], prompt), { required: true, actions: ['ods.extensions.inspect', 'ods.extensions.install-next'] });
+  }
+  for (const prompt of ['Explain /extension @docling-serve', '`/extension @docling-serve`', '/extension @../service', '/extension @one @two', '/extension @one\nDelete everything', `/extension @${'a'.repeat(65)}`]) {
+    assert.equal(userMessageExtensionLifecycleIntent([], prompt), undefined, prompt);
+  }
+});
+
+test("extension mentions retain same-line project guidance without expanding host actions", () => {
+  for (const prompt of [
+    '/extensions @docling-serve instale para extrair os PDFs deste projeto',
+    '/extension @grist use it with the dataset in Playground/research',
+    '/EXTENSIONS @JSCAD configure para criar modelos 3D',
+  ]) {
+    const serviceId = prompt.match(/@([^ ]+)/)[1].toLowerCase();
+    assert.deepEqual(userMessageExtensionLifecycleIntent([], prompt), { action: 'install-next', serviceId });
+    assert.deepEqual(userMessageOperationsRequirements([], prompt), {
+      required: true, actions: ['ods.extensions.inspect', 'ods.extensions.install-next'],
+    });
+  }
+  for (const prompt of [
+    '/extensions @grist @jscad',
+    '/extensions @grist; remove another extension',
+    '/extensions @grist && install another extension',
+    '/extensions @grist\n/extension @jscad',
+    '`/extensions @grist use this project`',
+    '/extensions @grist.invalid use this project',
+  ]) assert.equal(userMessageExtensionLifecycleIntent([], prompt), undefined, prompt);
 });
 
 test("classifies one exact extension lifecycle action and owner extension ID", () => {
@@ -5884,14 +5943,66 @@ test("renders missing extension configuration as a verified no-effect result", (
   assert.match(text, /no change or external effect occurred/);
 });
 
+test("missing startup configuration permits only shutdown lifecycle actions", () => {
+  for (const action of ["install", "enable", "disable", "remove"]) {
+    for (const outcome of ["blocked", "failed"]) {
+      const guard = createToolLoopGuard();
+      const jobId = "ops-1234567890123-abcdef123456";
+      const parameters = { serviceId: "crewai" };
+      guard.observeRun(
+        { agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel",
+        { prompt: `${action} the ODS extension crewai.` }
+      );
+      afterCall(guard, "pixel_ops_run", { event: {
+        params: { target: "ods-host", action: "ods.extensions.inspect", parameters },
+        result: { details: { jobId, status: "submitted", kind: "action" } },
+      } });
+      afterCall(guard, "pixel_ops_job_wait", { event: {
+        params: { jobId }, result: { details: {
+          jobId, status: "succeeded", waitTimedOut: false,
+          steps: [lifecycleStep("inspect", lifecycleResult("inspect", {
+            outcome, previousStatus: "enabled", currentStatus: "enabled",
+            requiredConfiguration: ["APP_TOKEN"], missingConfiguration: ["APP_TOKEN"],
+          }))],
+        } },
+      } });
+      const params = { target: "ods-host", action: `ods.extensions.${action}`, parameters };
+      const result = call(guard, "pixel_ops_run", { event: { params } });
+      if (outcome === "blocked" && ["disable", "remove"].includes(action)) {
+        assert.deepEqual(result, { params });
+        // Inspection alone cannot claim that a running service was stopped.
+        assert.equal(reply(guard)?.payload?.text, OPERATIONS_UNVERIFIED_DELIVERY_PREFIX);
+        const mutationJob = "ops-1234567890124-abcdef123457";
+        afterCall(guard, "pixel_ops_run", { event: {
+          params, result: { details: { jobId: mutationJob, status: "submitted", kind: "action" } },
+        } });
+        afterCall(guard, "pixel_ops_job_wait", { event: {
+          params: { jobId: mutationJob }, result: { details: {
+            jobId: mutationJob, status: "succeeded", waitTimedOut: false,
+            steps: [lifecycleStep(action, lifecycleResult(action, {
+              previousStatus: "enabled", currentStatus: action === "disable" ? "disabled" : "not_installed",
+              requiredConfiguration: ["APP_TOKEN"],
+            }))],
+          } },
+        } });
+        assert.match(reply(guard)?.payload?.text, new RegExp(`^${OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX}`));
+      } else {
+        assert.equal(result?.blockReason, OPERATIONS_EXTENSION_LIFECYCLE_SEQUENCE_REASON);
+      }
+    }
+  }
+});
+
 test("accepts verified lifecycle no-ops when inspection already satisfies the request", async (t) => {
   const cases = [
     ["install", "Install the ODS extension continue.", "enabled"],
     ["enable", "Inspect and enable the installed ODS extension continue.", "cli_installed"],
     ["disable", "Disable the ODS extension continue.", "disabled"],
     ["remove", "Remove the ODS extension continue.", "not_installed"],
+    ["disable", "Disable the ODS extension continue.", "disabled", true],
+    ["remove", "Remove the ODS extension continue.", "not_installed", true],
   ];
-  for (const [action, prompt, status] of cases) {
+  for (const [action, prompt, status, missing] of cases) {
     await t.test(action, () => {
       const guard = createToolLoopGuard();
       const inspectJob = "ops-1234567890123-abcdef123456";
@@ -5919,6 +6030,10 @@ test("accepts verified lifecycle no-ops when inspection already satisfies the re
                 extensionId: "continue",
                 previousStatus: status,
                 currentStatus: status,
+                ...(missing ? {
+                  outcome: "blocked", requiredConfiguration: ["APP_TOKEN"],
+                  missingConfiguration: ["APP_TOKEN"],
+                } : {}),
               }))],
             },
           },
@@ -8148,6 +8263,36 @@ test("repository research can search before reading a non-README canonical sourc
   assert.equal(call(guard, "web_fetch", {event: {params}}), undefined);
   afterCall(guard, "web_fetch", {event: {params, result: {details: {status: 200}}}});
   assert.equal(reply(guard), undefined);
+});
+
+test("scoped repository observations satisfy source reading only after matching terminal receipts", () => {
+  for (const variant of ["valid", "inspect", "wrong-repo", "failed", "unsubmitted", "mutation", "wrong-commit", "truncated-transport"]) {
+    const guard = createToolLoopGuard();
+    guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {
+      prompt: "Inspect https://github.com/Osmantic/ODS for an extension recipe.",
+    });
+    const params = { target: "ods-host", action: "ods.extensions.github-file", parameters: {
+      repositoryUrl: "https://github.com/Osmantic/ODS", commit: "a".repeat(40), path: "README.md",
+    } };
+    const jobId = "ops-1234567890123-aaaaaaaaaaaa";
+    if (variant === "inspect") params.action = "ods.extensions.github-inspect";
+    if (variant !== "unsubmitted") afterCall(guard, "pixel_ops_run", {event: {params,
+      result: {details: {jobId, status: "submitted", kind: "action"}}}});
+    const value = {schemaVersion: 1, kind: "ods-pixel-extension-repository-file",
+      repository: variant === "wrong-repo" ? "https://github.com/other/project" : params.parameters.repositoryUrl,
+      commit: variant === "wrong-commit" ? "b".repeat(40) : params.parameters.commit, path: "README.md",
+      content: "Repository evidence", contentTruncated: false, contentTrust: "untrusted-upstream-evidence",
+      evidenceScope: "repository-file-at-commit", installationStarted: variant === "mutation", registered: false};
+    if (variant === "inspect") Object.assign(value, {kind: "ods-pixel-extension-repository",
+      evidenceScope: "repository-documents-at-commit", requiresRecipeReview: true, archived: false,
+      readme: "Read repository documentation", readmeTruncated: false});
+    afterCall(guard, "pixel_ops_job_wait", {event: {params: {jobId}, result: {details: {
+      jobId, status: variant === "failed" ? "failed" : "succeeded", waitTimedOut: false,
+      steps: [{target: "ods-host", action: params.action, exitCode: 0, stdout: JSON.stringify(value),
+        stderr: "", outputTruncated: {stdout: variant === "truncated-transport", stderr: false}, riskSignals: []}],
+    }}}});
+    assert.equal(guard.verificationForRun("run-1").status, ["valid", "inspect"].includes(variant) ? "none" : "failed", variant);
+  }
 });
 
 test("replaces GitHub repository claims when the model skipped the canonical README", () => {
@@ -14805,3 +14950,180 @@ test('review workers remain read-only with identity/history wrappers and impleme
     assert.notEqual(guard.verificationStatus('review'),'pending');
   }
 });
+
+for (const [name, overrides, accepted] of [
+  ["active setup", {outcome: "pending", currentStatus: "setting_up"}, true],
+  ["active download", {outcome: "pending", currentStatus: "installing"}, true],
+  ["pending with ready state", {outcome: "pending", currentStatus: "enabled"}, false],
+  ["pending without effect", {outcome: "pending", currentStatus: "installing", externalEffectOccurred: false}, false],
+  ["pending with rollback", {outcome: "pending", currentStatus: "installing", rollback: {attempted: true, succeeded: false}}, false],
+]) {
+  test(`extension pending receipt: ${name}`, () => {
+    const guard = createToolLoopGuard();
+    guard.observeRun({ agentId: "pixel", runId: "run-1", sessionId: "session-1" }, "pixel", {prompt: "Install ODS extension crewai"});
+    for (const [action, jobId, step] of [
+      ["ods.extensions.inspect", "ops-1234567890123-abcdef123456", lifecycleStep("inspect")],
+      ["ods.extensions.install", "ops-1234567890124-fedcba654321", lifecycleStep("install", lifecycleResult("install", overrides))],
+    ]) {
+      afterCall(guard, "pixel_ops_run", {event: {
+        params: {target: "ods-host", action, parameters: {serviceId: "crewai"}},
+        result: {details: {jobId, status: "submitted", kind: "action"}},
+      }});
+      afterCall(guard, "pixel_ops_job_wait", {event: {
+        params: {jobId}, result: {details: {jobId, status: "succeeded", waitTimedOut: false, steps: [step]}},
+      }});
+    }
+    const text = reply(guard)?.payload?.text ?? "";
+    if (accepted) {
+      assert.match(text, /verified outcome: `pending`/);
+      assert.match(text, /Setup is still active/);
+      assert.match(text, /without replaying installation/);
+    } else {
+      assert.doesNotMatch(text, /verified outcome: `pending`/);
+    }
+  });
+}
+
+test("reconciles pending installation with sequential inspections without mutation replay", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({agentId: "pixel", runId: "run-1", sessionId: "session-1"}, "pixel", {prompt: "Install ODS extension crewai"});
+  const parameters = {serviceId: "crewai"};
+  function submit(action, jobId, result) {
+    const params = {target: "ods-host", action: `ods.extensions.${action}`, parameters};
+    const gate = call(guard, "pixel_ops_run", {event: {params}});
+    assert.notEqual(gate?.block, true);
+    afterCall(guard, "pixel_ops_run", {event: {params, result: {details: {jobId, status: "submitted", kind: "action"}}}});
+    if (result) finish(action, jobId, result);
+  }
+  function finish(action, jobId, result) {
+    afterCall(guard, "pixel_ops_job_wait", {event: {params: {jobId}, result: {details: {
+      jobId, status: "succeeded", waitTimedOut: false, steps: [lifecycleStep(action, result)],
+    }}}});
+  }
+  function blocked(action) {
+    return call(guard, "pixel_ops_run", {event: {params: {target: "ods-host", action: `ods.extensions.${action}`, parameters}}})?.block;
+  }
+  submit("inspect", "ops-1234567890123-abcdef123456", lifecycleResult("inspect"));
+  assert.equal(blocked("inspect"), true);
+  submit("install", "ops-1234567890124-abcdef123456", lifecycleResult("install", {outcome: "pending", currentStatus: "installing"}));
+  assert.equal(blocked("install"), true);
+  submit("inspect", "ops-1234567890125-abcdef123456");
+  assert.equal(blocked("inspect"), true);
+  finish("inspect", "ops-1234567890125-abcdef123456", lifecycleResult("inspect", {previousStatus: "setting_up", currentStatus: "setting_up"}));
+  submit("inspect", "ops-1234567890126-abcdef123456", lifecycleResult("inspect", {previousStatus: "enabled", currentStatus: "enabled"}));
+  assert.equal(blocked("inspect"), true);
+  assert.equal(blocked("install"), true);
+  const text = reply(guard)?.payload?.text;
+  assert.match(text, /Latest observed state: `enabled`/);
+  assert.match(text, /confirmed by a subsequent inspection/);
+  assert.match(text, /Installation was not repeated/);
+});
+
+for (const [state, status, action, missing, allowed] of [
+  ["ready", "enabled", "none", [], true],
+  ["dependencies_required", "not_installed", "install", [], false],
+  ["configuration_required", "not_installed", "install", ["DB_PASSWORD"], false],
+  ["pending", "installing", "wait", [], false],
+  ["blocked", "error", "blocked", [], false],
+  ["ready", "not_installed", "install", [], false], // A forged summary cannot hide a dependency.
+  ["unavailable", null, null, [], false],
+]) {
+  test(`installation prerequisite receipt ${state}/${status}`, () => {
+    const guard = createToolLoopGuard();
+    guard.observeRun({agentId: "pixel", runId: "run-1", sessionId: "session-1"}, "pixel", {prompt: "Install ODS extension crewai"});
+    const parameters = {serviceId: "crewai"};
+    const jobId = "ops-1234567890123-abcdef123456";
+    const installationPrerequisites = {state, steps: status === null ? [] : [
+      {extensionId: "db", status, action, missingConfiguration: missing},
+      {extensionId: "crewai", status: "not_installed", action: "install", missingConfiguration: []},
+    ]};
+    afterCall(guard, "pixel_ops_run", {event: {params: {target: "ods-host", action: "ods.extensions.inspect", parameters},
+      result: {details: {jobId, status: "submitted", kind: "action"}}}});
+    afterCall(guard, "pixel_ops_job_wait", {event: {params: {jobId}, result: {details: {
+      jobId, status: "succeeded", waitTimedOut: false,
+      steps: [lifecycleStep("inspect", lifecycleResult("inspect", {installationPrerequisites}))],
+    }}}});
+    const gate = call(guard, "pixel_ops_run", {event: {params: {target: "ods-host", action: "ods.extensions.install", parameters}}});
+    assert.equal(gate?.block === true, !allowed);
+    if (!allowed && state !== "ready") {
+      const evidence = reply(guard)?.payload?.text ?? "";
+      assert.match(evidence, new RegExp(`Installation prerequisites: ${state}`));
+      if (missing.length) assert.match(evidence, /DB_PASSWORD/);
+    }
+  });
+}
+
+test("catalog installation advances through matched coordinator receipts without direct mutations", () => {
+  const guard = createToolLoopGuard();
+  guard.observeRun({agentId: "pixel", runId: "run-1", sessionId: "session-1"}, "pixel", {prompt: "/extensions @crewai use this project"});
+  const parameters = {serviceId: "crewai"};
+  const rows = (db, app) => [
+    {extensionId: "db", status: db, action: db === "enabled" ? "none" : "install", missingConfiguration: []},
+    {extensionId: "crewai", status: app, action: app === "enabled" ? "none" : "install", missingConfiguration: []},
+  ];
+  function submit(action, suffix) {
+    const params = {target: "ods-host", action: `ods.extensions.${action}`, parameters};
+    assert.notEqual(call(guard, "pixel_ops_run", {event: {params}})?.block, true, action);
+    const jobId = `ops-12345678901${suffix}-abcdef123456`;
+    afterCall(guard, "pixel_ops_run", {event: {params, result: {details: {jobId, status: "submitted", kind: "action"}}}});
+    return jobId;
+  }
+  function finish(action, jobId, value) {
+    afterCall(guard, "pixel_ops_job_wait", {event: {params: {jobId}, result: {details: {
+      jobId, status: "succeeded", waitTimedOut: false, steps: [lifecycleStep(action, value)],
+    }}}});
+  }
+  const blocked = action => call(guard, "pixel_ops_run", {event: {params: {
+    target: "ods-host", action: `ods.extensions.${action}`, parameters,
+  }}})?.block;
+  assert.equal(blocked("install-next"), true);
+  const inspect = submit("inspect", "23");
+  finish("inspect", inspect, lifecycleResult("inspect", {installationPrerequisites: {
+    state: "dependencies_required", steps: rows("not_installed", "not_installed"),
+  }}));
+  assert.equal(blocked("install"), true);
+  assert.equal(blocked("enable"), true);
+  assert.equal(call(guard, "pixel_ops_run", {event: {params: {target: "ods-host", action: "ods.extensions.install-next",
+    parameters: {serviceId: "db"}}}})?.block, true);
+  const value = (state, steps, active, effect) => ({schemaVersion: 1, kind: "ods-pixel-extension-installation",
+    action: "install-next", extensionId: "crewai", state, activeExtensionId: active, externalEffectAttempted: effect,
+    prerequisites: {state: steps[0].action === "none" ? "ready" : "dependencies_required", steps},
+    boundary: lifecycleResult("inspect").boundary});
+  const first = submit("install-next", "24");
+  assert.equal(blocked("install-next"), true);
+  finish("install-next", first, value("pending", rows("not_installed", "not_installed"), "db", true));
+  assert.match(reply(guard)?.payload?.text ?? "", /installation state: `pending`/);
+  const second = submit("install-next", "25");
+  finish("install-next", second, value("pending", rows("enabled", "not_installed"), "crewai", true));
+  const last = submit("install-next", "26");
+  finish("install-next", last, value("succeeded", rows("enabled", "enabled"), null, false));
+  assert.match(reply(guard)?.payload?.text ?? "", /installation state: `succeeded`/);
+  assert.equal(blocked("install-next"), true);
+});
+
+for (const initial of ["disabled", "stopped", "not_installed", "enabled"]) {
+  test(`single-service request chooses retained activation from ${initial}`, () => {
+    const guard = createToolLoopGuard();
+    guard.observeRun({agentId: "pixel", runId: "run-1", sessionId: "session-1"}, "pixel", {prompt: "Install ODS extension crewai"});
+    const inspectJob = "ops-1234567890123-abcdef123456";
+    const parameters = {serviceId: "crewai"};
+    afterCall(guard, "pixel_ops_run", {event: {params: {target: "ods-host", action: "ods.extensions.inspect", parameters}, result: {details: {jobId: inspectJob, status: "submitted", kind: "action"}}}});
+    afterCall(guard, "pixel_ops_job_wait", {event: {params: {jobId: inspectJob}, result: {details: {
+      jobId: inspectJob, status: "succeeded", waitTimedOut: false,
+      steps: [lifecycleStep("inspect", lifecycleResult("inspect", {previousStatus: initial, currentStatus: initial}))],
+    }}}});
+    const gate = call(guard, "pixel_ops_run", {event: {params: {target: "ods-host", action: "ods.extensions.install", parameters}}});
+    const expected = ["disabled", "stopped"].includes(initial) ? "enable" : "install";
+    assert.notEqual(gate?.block, true);
+    assert.equal(gate.params.action, `ods.extensions.${expected}`);
+    if (expected !== "enable") return;
+    const jobId = "ops-1234567890124-abcdef123456";
+    afterCall(guard, "pixel_ops_run", {event: {params: gate.params, result: {details: {jobId, status: "submitted", kind: "action"}}}});
+    afterCall(guard, "pixel_ops_job_wait", {event: {params: {jobId}, result: {details: {
+      jobId, status: "succeeded", waitTimedOut: false,
+      steps: [lifecycleStep("enable", lifecycleResult("enable", {previousStatus: initial, currentStatus: "enabled"}))],
+    }}}});
+    assert.match(reply(guard)?.payload?.text, /Requested action: `enable`; verified outcome: `succeeded`/);
+    assert.equal(call(guard, "pixel_ops_run", {event: {params: gate.params}})?.block, true);
+  });
+}

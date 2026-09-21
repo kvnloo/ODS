@@ -952,9 +952,10 @@ class TestEnableExtension:
         resp = test_client.post("/api/extensions/my-ext/enable")
         assert resp.status_code == 401
 
-    def test_enable_rejects_build_context(self, test_client, monkeypatch, tmp_path):
+    @pytest.mark.parametrize('context', ['.', 'https://github.com/example/project.git#' + 'a' * 40])
+    def test_enable_rejects_build_context(self, test_client, monkeypatch, tmp_path, context):
         """400 when user extension compose contains a build context."""
-        bad_compose = "services:\n  svc:\n    build: .\n"
+        bad_compose = f"services:\n  svc:\n    build: {context}\n"
         user_dir = tmp_path / "user"
         user_dir.mkdir(exist_ok=True)
         ext_dir = user_dir / "bad-ext"
@@ -2661,6 +2662,27 @@ class TestExtensionLifecycleStatus:
         assert resp.status_code == 200
         ext = resp.json()["extensions"][0]
         assert ext["status"] == "enabled"
+
+    @pytest.mark.parametrize("endpoint", ["/api/extensions/catalog", "/api/extensions/my-ext"])
+    def test_user_extension_public_url_reaches_catalog_and_detail(self, test_client, monkeypatch, tmp_path, endpoint):
+        user_dir = tmp_path / "user"
+        ext_dir = user_dir / "my-ext"
+        ext_dir.mkdir(parents=True)
+        (ext_dir / "compose.yaml").write_text(_SAFE_COMPOSE)
+        _patch_extensions_config(monkeypatch, [_make_catalog_ext("my-ext", "My Extension")], tmp_path=tmp_path)
+        monkeypatch.setattr("routers.extensions.USER_EXTENSIONS_DIR", user_dir)
+        config = {"my-ext": {"port": 8443, "health": "/health", "public_url": "https://localhost:11146/nifi"}}
+        with (
+            patch("user_extensions.get_user_services_cached", return_value=config),
+            patch("helpers.get_cached_services", return_value=[]),
+            patch("helpers.check_service_health", new_callable=AsyncMock,
+                  return_value=_make_service_status("my-ext", "healthy")),
+        ):
+            response = test_client.get(endpoint, headers=test_client.auth_headers)
+        assert response.status_code == 200
+        value = response.json()
+        entry = value["extensions"][0] if endpoint.endswith("catalog") else value
+        assert entry["public_url"] == "https://localhost:11146/nifi"
 
     def test_catalog_includes_user_extension_health(self, test_client, monkeypatch, tmp_path):
         """Catalog response includes 'stopped' in summary counts."""

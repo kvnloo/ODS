@@ -5646,6 +5646,41 @@ def _repair_rootless_data_ownership(service_id: str) -> None:
         )
 
 
+def _extension_stop_targets(service_id: str) -> list[str]:
+    """Include namespaced companions owned by this extension's compose fragment.
+
+    Never walk depends_on: those dependencies may be shared ODS services.
+    A separately registered extension retains its independent lifecycle.
+    """
+    targets = [service_id]
+    ext_dir = _find_ext_dir(service_id)
+    if ext_dir is None:
+        return targets
+    compose_path = ext_dir / "compose.yaml"
+    if not compose_path.exists():
+        return targets
+    if compose_path.is_symlink():
+        raise RuntimeError("Cannot resolve extension companions from a symlink")
+    try:
+        import yaml
+        data = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+    except (ImportError, OSError, UnicodeError) as exc:
+        raise RuntimeError(f"Cannot read extension stop targets: {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise RuntimeError("Invalid extension compose file") from exc
+    services = data.get("services") if isinstance(data, dict) else None
+    if not isinstance(services, dict) or service_id not in services:
+        raise RuntimeError("Extension compose file does not declare its service")
+    for name in services:
+        if (isinstance(name, str) and SERVICE_ID_RE.fullmatch(name)
+                and name.startswith(service_id + "-")
+                and name not in ALWAYS_ON_SERVICES
+                and name not in CORE_SERVICE_IDS
+                and _find_ext_dir(name) is None):
+            targets.append(name)
+    return targets
+
+
 def docker_compose_action(service_id: str, action: str) -> tuple:
     flags = resolve_compose_flags()
     compose_env = os.environ.copy()
@@ -5666,7 +5701,11 @@ def docker_compose_action(service_id: str, action: str) -> tuple:
             return False, str(exc)
         cmd = ["docker", "compose"] + flags + ["up", "-d", service_id]
     elif action == "stop":
-        cmd = ["docker", "compose"] + flags + ["stop", service_id]
+        try:
+            targets = _extension_stop_targets(service_id)
+        except RuntimeError as exc:
+            return False, str(exc)
+        cmd = ["docker", "compose"] + flags + ["stop", *targets]
     else:
         return False, f"Unknown action: {action}"
     timeout = SUBPROCESS_TIMEOUT_START if action == "start" else SUBPROCESS_TIMEOUT_STOP
@@ -6993,6 +7032,66 @@ def _declared_docker_containers() -> dict[str, str]:
     return containers
 
 
+def _prepare_install_images(flags: list[str], service_id: str) -> tuple[bool, str]:
+    """Prepare only the requested service's effective Compose dependency graph.
+
+    Compose owns interpolation/overlays. Never infer a build from a single
+    manifest or pull a locally built image from an unrelated registry.
+    """
+    base = ["docker", "compose", *flags]
+    result = subprocess.run(base + ["config", "--format", "json"],
+                            cwd=str(INSTALL_DIR), capture_output=True, text=True, timeout=30)
+    if result.returncode:
+        return False, "Could not resolve installation Compose configuration"
+    try:
+        services = json.loads(result.stdout)['services']
+        if not isinstance(services, dict):
+            raise ValueError()
+        pending, seen, pulls, builds = [service_id], set(), [], []
+        while pending:
+            name = pending.pop()
+            if name in seen:
+                continue
+            if not isinstance(name, str) or not SERVICE_ID_RE.fullmatch(name):
+                raise ValueError()
+            seen.add(name)
+            definition = services[name]
+            if not isinstance(definition, dict):
+                raise ValueError()
+            dependencies = definition.get('depends_on', {})
+            if not isinstance(dependencies, (dict, list)):
+                raise ValueError()
+            for dependency in dependencies:
+                options = dependencies[dependency] if isinstance(dependencies, dict) else {}
+                if (dependency not in services and isinstance(options, dict)
+                        and options.get('required') is False):
+                    continue
+                pending.append(dependency)
+            if definition.get('build'):
+                builds.append(name)
+            elif definition.get('image'):
+                pulls.append(name)
+            else:
+                raise ValueError()
+    except (ValueError, KeyError, TypeError):
+        return False, "Invalid installation Compose dependency graph"
+    if pulls:
+        _write_progress(service_id, "pulling", "Downloading images...")
+        result = subprocess.run(base + ["pull", *sorted(pulls)], cwd=str(INSTALL_DIR),
+                                capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT_START)
+        if result.returncode:
+            # A cached image may still satisfy Compose up. Startup remains the
+            # authority; this does not report installation as successful.
+            logger.warning("Image pull failed for %s; checking cached images at startup", service_id)
+    if builds:
+        _write_progress(service_id, "pulling", "Building images from source...")
+        result = subprocess.run(base + ["build", *sorted(builds)], cwd=str(INSTALL_DIR),
+                                capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT_START)
+        if result.returncode:
+            return False, "Source image build failed; containers were not started"
+    return True, ""
+
+
 def _is_other_ext_compose(fpath: str, service_id: str, ext_roots: tuple) -> bool:
     """True if fpath points to an extension compose file owned by an
     extension other than service_id. Used to filter `-f` args from the
@@ -7761,6 +7860,8 @@ class AgentHandler(BaseHTTPRequestHandler):
             self._handle_model_delete()
         elif self.path == "/v1/compose/invalidate-cache":
             self._handle_invalidate_compose_cache()
+        elif self.path == "/v1/extensions/configure":
+            self._handle_extension_configure()
         elif self.path == "/v1/env/update":
             self._handle_env_update()
         elif self.path == "/v1/setup/persona":
@@ -8927,6 +9028,82 @@ class AgentHandler(BaseHTTPRequestHandler):
             "wifi_connected": wifi_connected,
         })
 
+    def _handle_extension_configure(self):
+        """Fill missing extension-owned settings without replacing the host env."""
+        if not check_auth(self):
+            return
+        body = read_json_body(self)
+        if body is None:
+            return
+        sid, values = body.get("service_id"), body.get("values")
+        if (set(body) != {"service_id", "values"} or not isinstance(sid, str)
+                or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", sid)
+                or sid in ALWAYS_ON_SERVICES or not isinstance(values, dict)
+                or not 1 <= len(values) <= 128):
+            json_response(self, 400, {"error": "Invalid extension configuration request"})
+            return
+        # Installed definitions shadow the library, including broken ones.
+        roots = (USER_EXTENSIONS_DIR, EXTENSIONS_DIR, DATA_DIR / "extensions-library")
+        directory = next((root / sid for root in roots if (root / sid).exists() or (root / sid).is_symlink()), None)
+        try:
+            if directory is None or directory.is_symlink() or not directory.is_dir():
+                raise ValueError()
+            for name in ("manifest.yaml", "manifest.yml"):
+                candidate = directory / name
+                if candidate.is_symlink() or (candidate.exists() and candidate.stat().st_size > 1024 * 1024):
+                    raise ValueError()
+            manifest = _read_manifest(directory)
+            service = manifest.get("service", {}) if manifest else {}
+            fields = service.get("env_vars", [])
+            if service.get("id") != sid or not isinstance(fields, list):
+                raise ValueError()
+            declared = [field.get("key") for field in fields if isinstance(field, dict)]
+            if len(declared) != len(fields) or any(not isinstance(key, str) for key in declared) or len(set(declared)) != len(declared):
+                raise ValueError()
+            prefix = sid.upper().replace("-", "_") + "_"
+            # Native upstream names retained by these existing ODS recipes.
+            aliases = {"librechat": {"JWT_SECRET", "JWT_REFRESH_SECRET", "CREDS_KEY", "CREDS_IV"},
+                       "paperless-ngx": {"PAPERLESS_SECRET_KEY"}, "piper-audio": {"PIPER_VOICE"}}
+            for key, value in values.items():
+                if (key not in declared or not re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", key)
+                        or not (key.startswith(prefix) or key in aliases.get(sid, set()))
+                        or not isinstance(value, str) or not value or len(value) > 4096
+                        or any(ord(c) < 32 or ord(c) == 127 for c in value)):
+                    raise ValueError()
+        except (ValueError, OSError):
+            json_response(self, 400, {"error": "Use declared extension-owned configuration keys and single-line values"})
+            return
+        if not _model_activate_lock.acquire(blocking=False):
+            json_response(self, 409, {"error": "Another configuration operation is in progress"})
+            return
+        try:
+            env_path = INSTALL_DIR / ".env"
+            if env_path.is_symlink():
+                raise ValueError()
+            text = env_path.read_text(encoding="utf-8")
+            # Never rotate an existing password or encryption key during
+            # installation. Treat even an export-prefixed assignment as owned.
+            pattern = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
+            for line in text.splitlines():
+                match = pattern.fullmatch(line)
+                if match and match[1] in values and match[2].strip() not in ("", "''", '""'):
+                    json_response(self, 409, {"error": "A requested setting is already configured; existing values were preserved"})
+                    return
+            lines = [line for line in text.splitlines()
+                     if not ((match := pattern.fullmatch(line)) and match[1] in values)]
+            for key, value in values.items():
+                # Literal dotenv escaping understood by Compose and load_env;
+                # never use shell concatenation or evaluate substitutions.
+                escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$")
+                lines.append(f'{key}="{escaped}"')
+            _copy_unique_env_backup(env_path, DATA_DIR / "config-backups")
+            _write_bound_env_text(env_path, "\n".join(lines) + "\n")
+            json_response(self, 200, {"service_id": sid, "saved_keys": sorted(values), "status": "saved"})
+        except (ValueError, OSError, RuntimeError):
+            json_response(self, 500, {"error": "Configuration could not be saved; inspect the retained backup before retrying"})
+        finally:
+            _model_activate_lock.release()
+
     def _handle_env_update(self):
         """Write a validated .env file. Dashboard-api delegates here because the
         container mount is :ro — only the host agent may write secrets to disk.
@@ -9725,7 +9902,7 @@ class AgentHandler(BaseHTTPRequestHandler):
         json_response(self, 200, {"status": "ok", "service_id": service_id, "hook": hook_name})
 
     def _handle_install(self):
-        """Combined install: setup_hook → pull → start with progress tracking."""
+        """Combined install: setup_hook → pull/build → start with progress tracking."""
         if not check_auth(self):
             return
         body = read_json_body(self)
@@ -9760,7 +9937,8 @@ class AgentHandler(BaseHTTPRequestHandler):
                     if not ok:
                         return
 
-                # Step 2: Pull (best-effort — failure is non-fatal if cached image exists).
+                # Step 2: Prepare images. Pulls may use a cached image on
+                # failure; source builds must succeed before starting.
                 # Narrow the pull to base + GPU overlay + this extension's own
                 # compose so we don't refetch images for every other installed
                 # extension on each install. The `up` step below keeps full
@@ -9788,15 +9966,10 @@ class AgentHandler(BaseHTTPRequestHandler):
                         )
                     pull_flags = flags
 
-                _write_progress(service_id, "pulling", "Downloading image...")
-                pull_result = subprocess.run(
-                    ["docker", "compose"] + pull_flags + ["pull", service_id],
-                    cwd=str(INSTALL_DIR), capture_output=True, text=True,
-                    timeout=SUBPROCESS_TIMEOUT_START,
-                )
-                if pull_result.returncode != 0:
-                    logger.warning("Pull failed for %s (rc=%d), proceeding to start: %s",
-                                   service_id, pull_result.returncode, pull_result.stderr[-200:])
+                prepared, image_error = _prepare_install_images(pull_flags, service_id)
+                if not prepared:
+                    _write_progress(service_id, "error", "Installation failed", error=image_error)
+                    return
 
                 # Step 3: Start
                 _write_progress(service_id, "starting", "Starting container...")

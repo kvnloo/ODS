@@ -24,6 +24,97 @@ _mod = importlib.util.module_from_spec(_spec)
 sys.modules["ods_host_agent"] = _mod
 _spec.loader.exec_module(_mod)
 
+
+@pytest.mark.parametrize('build_exit', [0, 1])
+def test_install_prepares_only_dependency_images_and_surfaces_build_failure(monkeypatch, build_exit):
+    config = {'services': {
+        'demo': {'build': {'context': 'https://github.com/example/demo.git#' + 'a' * 40},
+                 'image': 'ods-source-demo:local', 'depends_on': {'demo-db': {}, 'demo-worker': {}}},
+        'demo-db': {'image': 'postgres:17'},
+        'demo-worker': {'build': {'context': '/extension/worker'}, 'depends_on': ['demo-db']},
+        'unrelated': {'build': {'context': '/unrelated'}},
+    }}
+    calls, progress = [], []
+    def run(command, **kwargs):
+        calls.append(command)
+        return types.SimpleNamespace(returncode=build_exit if 'build' in command else 0,
+                                     stdout=json.dumps(config), stderr='private build output')
+    monkeypatch.setattr(_mod.subprocess, 'run', run)
+    monkeypatch.setattr(_mod, '_write_progress', lambda *args: progress.append(args))
+    ok, error = _mod._prepare_install_images(['-p', 'ods'], 'demo')
+    assert ok is (build_exit == 0)
+    assert 'private' not in error
+    base = ['docker', 'compose', '-p', 'ods']
+    assert calls == [base + ['config', '--format', 'json'], base + ['pull', 'demo-db'],
+                     base + ['build', 'demo', 'demo-worker']]
+    assert progress[-1][2] == 'Building images from source...'
+
+
+@pytest.mark.parametrize('services', [{}, {'demo': {'depends_on': ['missing'], 'image': 'demo:1'}},
+                                      {'demo': {'build': '.', 'depends_on': 'invalid'}}])
+def test_invalid_image_graph_never_downloads_or_builds(monkeypatch, services):
+    calls = []
+    def run(command, **kwargs):
+        calls.append(command)
+        return types.SimpleNamespace(returncode=0, stdout=json.dumps({'services': services}), stderr='')
+    monkeypatch.setattr(_mod.subprocess, 'run', run)
+    assert _mod._prepare_install_images([], 'demo')[0] is False
+    assert len(calls) == 1
+
+
+def test_image_preparation_allows_cached_images_and_absent_optional_dependency(monkeypatch):
+    calls = []
+    config = {'services': {'demo': {'image': 'demo:1', 'depends_on': {'optional': {'required': False}}}}}
+    def run(command, **kwargs):
+        calls.append(command)
+        return types.SimpleNamespace(returncode=1 if 'pull' in command else 0,
+                                     stdout=json.dumps(config), stderr='')
+    monkeypatch.setattr(_mod.subprocess, 'run', run)
+    monkeypatch.setattr(_mod, '_write_progress', lambda *args: None)
+    assert _mod._prepare_install_images([], 'demo') == (True, '')
+    assert calls[-1] == ['docker', 'compose', 'pull', 'demo']
+
+
+def test_extension_stop_includes_owned_companions_but_not_shared_services(tmp_path, monkeypatch):
+    extension = tmp_path / 'karakeep'
+    extension.mkdir()
+    (extension / 'compose.yaml').write_text('''services:
+  karakeep:
+    depends_on: [litellm]
+  karakeep-chrome: {}
+  karakeep-search: {}
+  karakeep-independent: {}
+  karakeep-protected: {}
+  litellm: {}
+  dashboard: {}
+''', encoding='utf-8')
+    monkeypatch.setattr(_mod, '_find_ext_dir', lambda name: extension if name == 'karakeep' else tmp_path / name if name == 'karakeep-independent' else None)
+    monkeypatch.setattr(_mod, 'CORE_SERVICE_IDS', {'karakeep-protected'})
+    monkeypatch.setattr(_mod, 'resolve_compose_flags', lambda: ['-p', 'ods'])
+    calls = []
+    def run(command, **kwargs):
+        calls.append(command)
+        return types.SimpleNamespace(returncode=0, stderr='')
+    monkeypatch.setattr(_mod.subprocess, 'run', run)
+    assert _mod.docker_compose_action('karakeep', 'stop') == (True, '')
+    assert calls == [['docker', 'compose', '-p', 'ods', 'stop', 'karakeep', 'karakeep-chrome', 'karakeep-search']]
+
+
+@pytest.mark.parametrize('compose', ['services: [broken]', 'services: {other: {}}', 'services: ['])
+def test_extension_stop_rejects_unreadable_ownership_without_running_docker(tmp_path, monkeypatch, compose):
+    (tmp_path / 'compose.yaml').write_text(compose, encoding='utf-8')
+    monkeypatch.setattr(_mod, '_find_ext_dir', lambda _: tmp_path)
+    monkeypatch.setattr(_mod, 'resolve_compose_flags', lambda: [])
+    monkeypatch.setattr(_mod.subprocess, 'run', lambda *a, **k: pytest.fail('Must not run Docker'))
+    ok, error = _mod.docker_compose_action('karakeep', 'stop')
+    assert not ok
+    assert error
+
+
+def test_extension_stop_preserves_single_service_behavior_without_fragment(monkeypatch):
+    monkeypatch.setattr(_mod, '_find_ext_dir', lambda _: None)
+    assert _mod._extension_stop_targets('legacy') == ['legacy']
+
 _parse_mem_value = _mod._parse_mem_value
 
 
@@ -4202,6 +4293,63 @@ def _make_body(raw_text: str, backup: bool = True) -> bytes:
     return json.dumps({"raw_text": raw_text, "backup": backup}).encode("utf-8")
 
 
+class TestExtensionConfiguration:
+    def setup_recipe(self, env_update_env, keys=('DEMO_PASSWORD',)):
+        import yaml
+        install, data = env_update_env
+        directory = data / 'extensions-library' / 'demo'
+        directory.mkdir(parents=True)
+        (directory / 'manifest.yaml').write_text(yaml.safe_dump({'service': {'id': 'demo',
+            'env_vars': [{'key': key, 'required': True, 'secret': True} for key in keys]}}))
+        return install, data
+
+    def send(self, values):
+        handler = _FakeHandler(json.dumps({'service_id': 'demo', 'values': values}).encode())
+        _mod.AgentHandler._handle_extension_configure(handler)
+        return handler
+
+    def test_save_preserves_host_values_and_does_not_return_secret(self, env_update_env):
+        install, data = self.setup_recipe(env_update_env)
+        password = 'private $name # test " quote \\ end'
+        handler = self.send({'DEMO_PASSWORD': password})
+        assert handler.response_code == 200
+        assert _mod.load_env(install / '.env')['DEMO_PASSWORD'] == password
+        assert _mod.load_env(install / '.env')['ODS_AGENT_KEY'] == 'existing'
+        assert password not in handler.wfile.getvalue().decode()
+        assert list((data / 'config-backups').iterdir())
+
+    def test_never_rotates_existing_secret_even_when_other_fields_are_empty(self, env_update_env):
+        install, _ = self.setup_recipe(env_update_env, ('DEMO_PASSWORD', 'DEMO_KEY'))
+        previous = 'ODS_AGENT_KEY=existing\nexport DEMO_PASSWORD=original\nDEMO_KEY=\n'
+        (install / '.env').write_text(previous)
+        handler = self.send({'DEMO_PASSWORD': 'replacement', 'DEMO_KEY': 'new'})
+        assert handler.response_code == 409
+        assert (install / '.env').read_text() == previous
+
+    @pytest.mark.parametrize('values', [{'ODS_AGENT_KEY': 'replacement'}, {'DEMO_PASSWORD': 'bad\nNEXT=value'},
+                                      {'DEMO_PASSWORD': 10}, {'DEMO_PASSWORD': ''}])
+    def test_invalid_patch_leaves_environment_unchanged(self, env_update_env, values):
+        install, _ = self.setup_recipe(env_update_env, ('DEMO_PASSWORD', 'ODS_AGENT_KEY'))
+        before = (install / '.env').read_bytes()
+        assert self.send(values).response_code == 400
+        assert (install / '.env').read_bytes() == before
+
+    def test_broken_installed_manifest_cannot_fall_back_to_library(self, env_update_env):
+        install, data = self.setup_recipe(env_update_env)
+        (data / 'user-extensions/demo').mkdir(parents=True)
+        assert self.send({'DEMO_PASSWORD': 'secret'}).response_code == 400
+        assert 'DEMO_PASSWORD' not in _mod.load_env(install / '.env')
+
+    def test_configuration_serializes_with_model_activation(self, env_update_env):
+        install, _ = self.setup_recipe(env_update_env)
+        assert _mod._model_activate_lock.acquire(blocking=False)
+        try:
+            assert self.send({'DEMO_PASSWORD': 'secret'}).response_code == 409
+        finally:
+            _mod._model_activate_lock.release()
+        assert 'DEMO_PASSWORD' not in _mod.load_env(install / '.env')
+
+
 class TestHandleEnvUpdate:
 
     def test_happy_path_writes_file_and_returns_backup(self, env_update_env):
@@ -6453,6 +6601,9 @@ class TestInstallStatePollBehavior:
         Compose ``pull`` and ``up`` always succeed (rc=0).
         Returns a ``calls`` list (each entry: ``{'argv': [...], 'kwargs': {...}}``).
         """
+        # Keep this install-state fixture independent of native Windows's
+        # platform probe, which itself uses subprocess to execute `ver`.
+        monkeypatch.setattr(_mod.platform, 'system', lambda: 'Linux')
         calls = []
         responses = list(inspect_responses)
 
@@ -6481,6 +6632,8 @@ class TestInstallStatePollBehavior:
 
             # docker compose ... -> always success.
             if (len(argv) >= 2 and argv[0] == "docker" and argv[1] == "compose"):
+                if argv[-3:] == ['config', '--format', 'json']:
+                    return _CP(0, json.dumps({'services': {'fakesvc': {'image': 'example/fake:1'}}}))
                 return _CP(0, "", "")
 
             # Anything else: refuse so the test fails loudly rather than

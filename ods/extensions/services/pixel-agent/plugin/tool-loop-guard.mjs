@@ -299,7 +299,7 @@ export const OPERATIONS_REQUIRES_WORKFLOW_REASON =
   "Pixel blocked a fragmented host inventory. Submit exactly one pixel_ops_workflow_submit containing every required ods-host action, then call pixel_ops_job_wait once for that workflow job. Do not submit separate pixel_ops_run jobs.";
 
 export const OPERATIONS_EXTENSION_LIFECYCLE_SEQUENCE_REASON =
-  "Pixel blocked an extension lifecycle shortcut. Submit exactly one ods.extensions.inspect action for the owner's extension ID and wait for its terminal receipt before submitting the requested lifecycle action. Do not combine lifecycle actions in a workflow or continue when inspection reports missing configuration.";
+  "Pixel blocked an extension lifecycle shortcut. Submit ods.extensions.inspect for the owner's extension ID and wait for its terminal receipt before submitting the requested lifecycle action once. If the lifecycle receipt is pending, inspect that same extension again sequentially to reconcile its current state; never repeat the mutation. Do not combine lifecycle actions in a workflow. Missing startup configuration blocks install/enable; a validated inspection can still precede the owner's requested disable/remove action.";
 
 export const OPERATIONS_CONTINUATION_REQUIRES_STATUS_REASON =
   "Pixel blocked a new action while checking an existing immutable Operations plan. Query only the exact owner-supplied job with pixel_ops_job_get or pixel_ops_job_wait; do not resubmit, repeat, approve, or widen the operation.";
@@ -1730,6 +1730,32 @@ function operationsTerminalOutcome(event, submittedJobs) {
     steps: details.steps,
     ...(submission.requiredNetworkPeer ? { requiredNetworkPeer: submission.requiredNetworkPeer } : {}),
   };
+}
+
+function repositoryObservationMatches(outcome, repository) {
+  if (outcome?.status !== "succeeded" || outcome.actions?.length !== 1 || outcome.steps?.length !== 1) return false;
+  const action = outcome.actions[0], step = outcome.steps[0];
+  if (action.target !== "ods-host" || !["ods.extensions.github-inspect", "ods.extensions.github-file"].includes(action.action)) return false;
+  if (!canonicalGitHubSourceMatches(action.parameters?.repositoryUrl, repository) || step.stdout.length > 256 * 1024) return false;
+  let value;
+  try { value = JSON.parse(step.stdout); } catch { return false; }
+  if (!value || value.schemaVersion !== 1 ||
+      !canonicalGitHubSourceMatches(value.repository, repository) ||
+      typeof value.commit !== "string" || !/^[a-f0-9]{40}$/.test(value.commit) ||
+      value.contentTrust !== "untrusted-upstream-evidence" ||
+      value.installationStarted !== false || value.registered !== false) return false;
+  if (action.action === "ods.extensions.github-file") {
+    return value.kind === "ods-pixel-extension-repository-file" &&
+      value.evidenceScope === "repository-file-at-commit" &&
+      value.commit === action.parameters?.commit && value.path === action.parameters?.path &&
+      typeof value.content === "string" && value.content.length <= 32000 &&
+      typeof value.contentTruncated === "boolean";
+  }
+  return value.kind === "ods-pixel-extension-repository" &&
+    value.evidenceScope === "repository-documents-at-commit" && value.requiresRecipeReview === true &&
+    typeof value.archived === "boolean" &&
+    (value.readme === null || (typeof value.readme === "string" && value.readme.length <= 24000)) &&
+    typeof value.readmeTruncated === "boolean";
 }
 
 function requiredHostObservationActions(state) {
@@ -3199,6 +3225,28 @@ function sameEffectiveLifecycleStatus(left, right) {
     [left, right].every((status) => ["enabled", "cli_installed"].includes(status));
 }
 
+function validInstallationPrerequisites(value, extensionId) {
+  if (!exactKeys(value, ["state", "steps"]) || !Array.isArray(value.steps) || value.steps.length > 128) return false;
+  if (value.state === "unavailable") return value.steps.length === 0;
+  if (!value.steps.length || value.steps.at(-1)?.extensionId !== extensionId) return false;
+  const seen = new Set();
+  for (const step of value.steps) {
+    if (!exactKeys(step, ["extensionId", "status", "action", "missingConfiguration"]) ||
+        typeof step.extensionId !== "string" || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(step.extensionId) ||
+        seen.has(step.extensionId) || !EXTENSION_LIFECYCLE_STATUSES.has(step.status) ||
+        !sortedConfigurationKeys(step.missingConfiguration)) return false;
+    const expected = ({enabled: "none", cli_installed: "none", disabled: "enable", stopped: "enable",
+      not_installed: "install", installing: "wait", setting_up: "wait"})[step.status] ?? "blocked";
+    if (step.action !== expected && step.action !== "blocked") return false;
+    seen.add(step.extensionId);
+  }
+  const expected = value.steps.some(s => s.action === "blocked") ? "blocked"
+    : value.steps.some(s => s.missingConfiguration.length) ? "configuration_required"
+    : value.steps.some(s => s.action === "wait") ? "pending"
+    : value.steps.slice(0, -1).some(s => s.action !== "none") ? "dependencies_required" : "ready";
+  return value.state === expected;
+}
+
 function extensionLifecycleResult(step, submittedAction) {
   const expectedAction = submittedAction?.action?.replace(/^ods\.extensions\./, "");
   const submittedParameters = submittedAction?.parameters;
@@ -3211,7 +3259,7 @@ function extensionLifecycleResult(step, submittedAction) {
     step.riskSignals.length > 0 ||
     typeof step.stdout !== "string" ||
     step.stdout.length > 256 * 1024 ||
-    !["inspect", "install", "enable", "disable", "remove"].includes(expectedAction) ||
+    !["inspect", "install", "install-next", "enable", "disable", "remove"].includes(expectedAction) ||
     !exactKeys(submittedParameters, ["serviceId"]) ||
     boundedCatalogString(submittedParameters.serviceId, /^[a-z0-9][a-z0-9._-]{0,63}$/, 64) === undefined
   ) {
@@ -3223,6 +3271,23 @@ function extensionLifecycleResult(step, submittedAction) {
   } catch {
     return undefined;
   }
+  if (expectedAction === "install-next") {
+    if (!exactKeys(value, ["schemaVersion", "kind", "action", "extensionId", "state", "activeExtensionId",
+      "externalEffectAttempted", "prerequisites", "boundary"]) || value.schemaVersion !== 1 ||
+      value.kind !== "ods-pixel-extension-installation" || value.action !== expectedAction ||
+      value.extensionId !== submittedParameters.serviceId || value.boundary !== EXTENSION_LIFECYCLE_BOUNDARY ||
+      typeof value.externalEffectAttempted !== "boolean" ||
+      !validInstallationPrerequisites(value.prerequisites, value.extensionId) ||
+      !["succeeded", "pending", "blocked", "configuration_required", "reconciliation_required"].includes(value.state)) return undefined;
+    const steps = value.prerequisites.steps;
+    if (value.activeExtensionId !== null && !steps.some(s => s.extensionId === value.activeExtensionId)) return undefined;
+    if (value.state === "succeeded" && (value.externalEffectAttempted || value.activeExtensionId !== null ||
+      !steps.length || steps.some(s => s.action !== "none"))) return undefined;
+    if (value.prerequisites.state === "unavailable" && value.state !== "reconciliation_required") return undefined;
+    if (value.externalEffectAttempted && !["pending", "reconciliation_required"].includes(value.state)) return undefined;
+    if (value.state === "pending" && value.activeExtensionId === null) return undefined;
+    return value;
+  }
   const topKeys = [
     "schemaVersion", "kind", "action", "extensionId", "outcome",
     "previousStatus", "currentStatus", "changed", "externalEffectOccurred",
@@ -3231,8 +3296,12 @@ function extensionLifecycleResult(step, submittedAction) {
   ];
   const scopedConfiguration = Object.prototype.hasOwnProperty.call(value ?? {}, "configurationScope");
   if (scopedConfiguration) topKeys.push("configurationScope", "runtimeRequirementsVerified");
+  const prerequisites = Object.prototype.hasOwnProperty.call(value ?? {}, "installationPrerequisites");
+  if (prerequisites) topKeys.push("installationPrerequisites");
   if (
     !exactKeys(value, topKeys) ||
+    (prerequisites && (expectedAction !== "inspect" ||
+      !validInstallationPrerequisites(value.installationPrerequisites, value.extensionId))) ||
     (scopedConfiguration && (value.configurationScope !== "declared-environment-keys" ||
       value.runtimeRequirementsVerified !== false)) ||
     value.schemaVersion !== 1 ||
@@ -3240,7 +3309,7 @@ function extensionLifecycleResult(step, submittedAction) {
     value.boundary !== EXTENSION_LIFECYCLE_BOUNDARY ||
     value.action !== expectedAction ||
     value.extensionId !== submittedParameters.serviceId ||
-    !["ready", "inspected", "blocked", "noop", "succeeded", "failed"].includes(value.outcome) ||
+    !["ready", "inspected", "blocked", "noop", "succeeded", "pending", "failed"].includes(value.outcome) ||
     !EXTENSION_LIFECYCLE_STATUSES.has(value.previousStatus) ||
     !EXTENSION_LIFECYCLE_STATUSES.has(value.currentStatus) ||
     typeof value.changed !== "boolean" ||
@@ -3293,10 +3362,17 @@ function extensionLifecycleResult(step, submittedAction) {
     ) {
       return undefined;
     }
+  } else if (value.outcome === "pending") {
+    if (
+      !["install", "enable", "disable"].includes(expectedAction) ||
+      !["installing", "setting_up"].includes(value.currentStatus) ||
+      !value.externalEffectOccurred || missing.length > 0 ||
+      value.rollback.attempted ||
+      value.changed !== !sameEffectiveLifecycleStatus(value.currentStatus, value.previousStatus)
+    ) return undefined;
   } else if (value.outcome === "failed") {
     if (
       value.changed && !value.externalEffectOccurred ||
-      (value.externalEffectOccurred && expectedAction !== "remove" && !value.rollback.attempted) ||
       (value.rollback.succeeded === true &&
         !sameEffectiveLifecycleStatus(value.currentStatus, value.previousStatus))
     ) {
@@ -3423,6 +3499,7 @@ function operationsContinuationEvidenceText(outcome) {
   }
   const result = outcome.result;
   if (!result) return undefined;
+  if (result.action === "install-next") return installationEvidence(result, outcome.jobId);
   return [
     OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX,
     `- Extension: \`${result.extensionId}\`.`,
@@ -3430,7 +3507,7 @@ function operationsContinuationEvidenceText(outcome) {
     `- State: \`${result.previousStatus}\` -> \`${result.currentStatus}\`.`,
     `- Change observed: ${result.changed ? "yes" : "no"}; external effect attempted: ${result.externalEffectOccurred ? "yes" : "no"}.`,
     `- Missing required configuration keys: ${result.missingConfiguration.length ? result.missingConfiguration.map((key) => `\`${key}\``).join(", ") : "none"}.`,
-    `- Rollback: ${result.rollback.attempted ? (result.rollback.succeeded ? "succeeded" : "failed") : "not required"}.`,
+    `- Rollback: ${result.rollback.attempted ? (result.rollback.succeeded ? "succeeded" : "failed") : "not attempted"}.`,
     `- Authority: ${EXTENSION_LIFECYCLE_BOUNDARY}`,
     `- Continued lifecycle job: \`${outcome.jobId}\`; plan SHA-256: \`${outcome.planHash}\`.`,
   ].join("\n");
@@ -3441,6 +3518,12 @@ function lifecycleOutcomeForAction(terminalJobs, action) {
   const matches = [...terminalJobs.values()].filter(
     (outcome) => outcome.actions?.length === 1 && outcome.actions[0]?.action === action
   );
+  if (["ods.extensions.inspect", "ods.extensions.install-next"].includes(action) && matches.length > 1) {
+    const first = matches[0].actions[0];
+    if (!matches.every((entry) => entry.actions[0].target === first.target &&
+      entry.actions[0].parameters?.serviceId === first.parameters?.serviceId)) return undefined;
+    return matches.at(-1);
+  }
   return matches.length === 1 ? matches[0] : undefined;
 }
 
@@ -3453,9 +3536,20 @@ function parsedLifecycleOutcome(terminalJobs, action) {
   return result ? { outcome, result } : undefined;
 }
 
+function inspectionPermitsLifecycleAction(inspection, mutationAction) {
+  const result = inspection?.result;
+  if (["ods.extensions.install", "ods.extensions.enable"].includes(mutationAction) &&
+      result?.installationPrerequisites && result.installationPrerequisites.state !== "ready") return false;
+  if (["ready", "inspected"].includes(result?.outcome)) return true;
+  // Configuration required for startup is not a prerequisite for stopping or
+  // removing a retained definition. Only validated, read-only receipts reach here.
+  return ["ods.extensions.disable", "ods.extensions.remove"].includes(mutationAction) &&
+    result?.outcome === "blocked" && result.missingConfiguration.length > 0;
+}
+
 function inspectionAlreadySatisfiesLifecycleAction(inspection, mutationAction) {
   const action = mutationAction?.replace(/^ods\.extensions\./, "");
-  return ["ready", "inspected"].includes(inspection?.result?.outcome) &&
+  return inspectionPermitsLifecycleAction(inspection, mutationAction) &&
     EXTENSION_LIFECYCLE_SUCCESS.get(action)?.has(inspection.result.currentStatus) === true;
 }
 
@@ -3561,6 +3655,18 @@ function extensionDiscoveryVerification(state) {
   return { status: successes > 0 ? "passed" : "failed", text: evidence.join("\n\n") };
 }
 
+function installationEvidence(result, jobId) {
+  return [OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX,
+    `- Extension: \`${result.extensionId}\`; installation state: \`${result.state}\`.`,
+    `- External effect attempted by this step: ${result.externalEffectAttempted ? "yes" : "no"}.`,
+    ...result.prerequisites.steps.map(s =>
+      `- \`${s.extensionId}\`: observed \`${s.status}\`; next action ${s.action}${s.missingConfiguration.length ? `; missing keys ${s.missingConfiguration.join(", ")}` : ""}.`),
+    ...(result.state === "pending" ? ["- Installation is still in progress; application readiness is not confirmed."] : []),
+    ...(result.state === "reconciliation_required" ? ["- The last request needs reconciliation; do not repeat a direct installation or remove retained work."] : []),
+    `- Installation job: \`${jobId}\`.`,
+  ].join("\n");
+}
+
 function extensionLifecycleEvidenceText(requiredActions, terminalJobs) {
   const mutationActions = [...requiredActions].filter(
     (action) => action.startsWith("ods.extensions.") && action !== "ods.extensions.inspect"
@@ -3582,13 +3688,31 @@ function extensionLifecycleEvidenceText(requiredActions, terminalJobs) {
   }
   const inspection = parsedLifecycleOutcome(terminalJobs, "ods.extensions.inspect");
   if (!inspection || !["ready", "inspected", "blocked"].includes(inspection.result.outcome)) return undefined;
-  if (inspection.result.outcome === "blocked") {
+  if (mutationActions[0] === "ods.extensions.install-next") {
+    const latest = parsedLifecycleOutcome(terminalJobs, "ods.extensions.install-next");
+    if (latest) return installationEvidence(latest.result, latest.outcome.jobId);
+    const prerequisites = inspection.result.installationPrerequisites;
+    if (prerequisites && !["ready", "dependencies_required", "pending"].includes(prerequisites.state)) {
+      return [OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX,
+        `- Extension: \`${inspection.result.extensionId}\`; installation prerequisites: ${prerequisites.state}.`,
+        ...prerequisites.steps.filter(s => s.missingConfiguration.length).map(s =>
+          `- \`${s.extensionId}\`: missing configuration keys ${s.missingConfiguration.join(", ")}.`),
+        "- No installation step was submitted."].join("\n");
+    }
+    return undefined;
+  }
+  if (!inspectionPermitsLifecycleAction(inspection, mutationActions[0])) {
     if (terminalJobs.size !== 1) return undefined;
     return [
       OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX,
       `- Extension: \`${inspection.result.extensionId}\`.`,
       `- Inspection: blocked in state \`${inspection.result.currentStatus}\`; no change or external effect occurred.`,
       `- Missing required configuration keys: ${inspection.result.missingConfiguration.map((key) => `\`${key}\``).join(", ")}.`,
+      ...(inspection.result.installationPrerequisites ? [
+        `- Installation prerequisites: ${inspection.result.installationPrerequisites.state}.`,
+        ...inspection.result.installationPrerequisites.steps.filter(s => s.action !== "none").map(s =>
+          `- \`${s.extensionId}\`: ${s.action}; current state \`${s.status}\`${s.missingConfiguration.length ? `; missing keys: ${s.missingConfiguration.join(", ")}` : ""}.`),
+      ] : []),
       `- Authority: ${EXTENSION_LIFECYCLE_BOUNDARY}`,
       `- Inspection job: \`${inspection.outcome.jobId}\`.`,
     ].join("\n");
@@ -3622,6 +3746,23 @@ function extensionLifecycleEvidenceText(requiredActions, terminalJobs) {
   const mutation = parsedLifecycleOutcome(terminalJobs, mutationAction);
   if (!mutation || mutation.result.extensionId !== inspection.result.extensionId) return undefined;
   const result = mutation.result;
+  if (result.outcome === "pending") {
+    const orderedJobs = [...terminalJobs.keys()];
+    const observedAfterMutation = orderedJobs.indexOf(inspection.outcome.jobId) >
+      orderedJobs.indexOf(mutation.outcome.jobId);
+    if (observedAfterMutation) {
+      return [
+        OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX,
+        `- Extension: \`${result.extensionId}\`; requested action: \`${result.action}\`.`,
+        `- Latest observed state: \`${inspection.result.currentStatus}\`.`,
+        inspectionAlreadySatisfiesLifecycleAction(inspection, mutationAction)
+          ? "- The requested lifecycle state is now confirmed by a subsequent inspection. Installation was not repeated."
+          : "- Completion is not confirmed. Use the latest inspection state to decide the next step; do not replay the original mutation.",
+        "- This confirms lifecycle state only, not every application feature.",
+        `- Lifecycle job: \`${mutation.outcome.jobId}\`; latest inspection job: \`${inspection.outcome.jobId}\`.`,
+      ].join("\n");
+    }
+  }
   const lines = [
     OPERATIONS_EXTENSION_LIFECYCLE_EVIDENCE_PREFIX,
     `- Extension: \`${result.extensionId}\`.`,
@@ -3633,6 +3774,9 @@ function extensionLifecycleEvidenceText(requiredActions, terminalJobs) {
     `- Authority: ${EXTENSION_LIFECYCLE_BOUNDARY}`,
     `- Inspection job: \`${inspection.outcome.jobId}\`; lifecycle job: \`${mutation.outcome.jobId}\`.`,
   ];
+  if (result.outcome === "pending") {
+    lines.push("- Setup is still active. Completion is not confirmed; inspect the extension again without replaying installation or rolling it back.");
+  }
   return lines.join("\n");
 }
 
@@ -3732,19 +3876,21 @@ function operationsEvidenceText(
       OPERATIONS_EXTENSION_INVENTORY_EVIDENCE_PREFIX,
       `- Target: \`${outcome.actions[0].target}\`.`,
       `- Catalog total: ${result.summary.total}; installed: ${result.summary.installed}; enabled: ${result.summary.enabled}; CLI-installed: ${result.summary.cliInstalled}.`,
-      `- Degraded or inactive installed state: disabled ${result.summary.disabled}; stopped ${result.summary.stopped}; unhealthy ${result.summary.unhealthy}; installing ${result.summary.installing}; setting up ${result.summary.settingUp}; error ${result.summary.error}.`,
+      `- Degraded or inactive installed state: disabled ${result.summary.disabled}; stopped ${result.summary.stopped}; unhealthy ${result.summary.unhealthy}.`,
+      `- Installation not confirmed: installing ${result.summary.installing}; setting up ${result.summary.settingUp}; error ${result.summary.error}.`,
       `- Not installed: ${result.summary.notInstalled}; incompatible: ${result.summary.incompatible}.`,
     ];
-    const installed = result.extensions.filter(
+    const observed = result.extensions.filter(
       (entry) => !["not_installed", "incompatible"].includes(entry.status)
     );
-    if (installed.length) {
-      for (const entry of installed) {
+    if (observed.length) {
+      for (const entry of observed) {
         lines.push(
           `- \`${entry.name}\` (\`${entry.id}\`): status \`${entry.status}\`; source \`${entry.source}\`; category \`${entry.category}\`; installable ${entry.installable ? "yes" : "no"}.`
         );
       }
-    } else {
+    }
+    if (result.summary.installed === 0) {
       lines.push("- Installed extensions: none.");
     }
     if (odsAppsProjection) {
@@ -4451,8 +4597,7 @@ function extensionInventoryResult(step, submittedAction) {
     }
   }
   const installedStatuses = new Set([
-    "enabled", "cli_installed", "disabled", "stopped", "unhealthy", "installing",
-    "setting_up", "error",
+    "enabled", "cli_installed", "disabled", "stopped", "unhealthy",
   ]);
   if (value.summary.installed !== extensions.filter((entry) => installedStatuses.has(entry.status)).length) {
     return undefined;
@@ -4498,6 +4643,15 @@ export function userMessageExtensionCatalogExactQuery(messages, prompt = undefin
 export function userMessageExtensionLifecycleIntent(messages, prompt = undefined) {
   const text = currentOwnerIntentText(messages, prompt);
   if (!text) return undefined;
+  // A leading owner-entered mention selects exactly one extension. Keep a
+  // same-line usage request in the original model prompt; it is not a host
+  // command or authority to mutate another extension. Quoted examples,
+  // multiple mentions and compound commands remain outside this shorthand.
+  const command = text.match(/^[ \t]*\/extensions?[ \t]+@([a-z0-9][a-z0-9_-]{0,63})(?:[ \t]+[^\r\n@;|&`]*?)?[ \t]*$/i);
+  if (command) return { action: "install-next", serviceId: command[1].toLowerCase() };
+  // Do not reinterpret a malformed slash request as an unrelated natural
+  // language action found in its trailing text.
+  if (/^[ \t]*\/extensions?\b/i.test(text)) return undefined;
   const match = text.match(
     /\b(install|enable|disable|remove|uninstall)\s+(?:the\s+)?(?:(?:installed|existing|enabled|disabled)\s+)?(?:ODS\s+)?extension\s+(?:(?:with\s+)?(?:the\s+)?(?:exact\s+)?id\s+)?[`"']?([a-z0-9](?:[a-z0-9_-]|\.(?=[a-z0-9])){0,63})(?![a-z0-9_-]|\.(?=[a-z0-9]))[`"']?/i
   ) ?? text.match(
@@ -4815,7 +4969,11 @@ export function userMessageOperationsRequirements(messages, prompt = undefined) 
     actions.push("host.architecture");
   }
   if (/\bhost platform\b/i.test(hostText)) actions.push("host.platform");
-  if (/\b(?:operating[- ]system(?: signature)?|(?:host\s+)?os(?:\s+(?:signature|release))?|linux distribution|distro)\b/i.test(hostText)) {
+  // Bare lowercase "os" is also a Portuguese article. Require a technical
+  // phrase or an explicit inspection request before treating it as the OS.
+  if (/\b(?:operating[- ]system(?: signature)?|host\s+os|os\s+(?:signature|release|version)|linux distribution|distro)\b/i.test(hostText) ||
+      /\bOS\b/.test(hostText) ||
+      /\b(?:check|inspect|report|show|identify)\s+(?:the\s+)?os\b/i.test(hostText)) {
     actions.push("host.os-release");
   }
   if (broadHostExploration || (hostContext && /\b(?:uptime|load averages?|system load)\b/i.test(hostText))) {
@@ -7632,7 +7790,46 @@ export function createToolLoopGuard({
           blockReason: OPERATIONS_EXTENSION_LIFECYCLE_SEQUENCE_REASON,
         };
       }
-      if (lifecycle && toolName === "pixel_ops_run") {
+      if (lifecycle?.action === "install-next" && toolName === "pixel_ops_run") {
+        if (!["ods.extensions.inspect", "ods.extensions.install-next"].includes(params?.action) ||
+            params?.target !== "ods-host" || !exactKeys(params?.parameters, ["serviceId"]) ||
+            params.parameters.serviceId !== lifecycle.serviceId) {
+          return {block: true, blockReason: OPERATIONS_WRONG_ACTION_REASON};
+        }
+        const submissions = [...state.operationsSubmittedJobs.entries()];
+        if (submissions.some(([id]) => !state.operationsTerminalJobs.has(id))) {
+          return {block: true, blockReason: OPERATIONS_EXTENSION_LIFECYCLE_SEQUENCE_REASON};
+        }
+        const inspection = parsedLifecycleOutcome(state.operationsTerminalJobs, "ods.extensions.inspect");
+        const latest = parsedLifecycleOutcome(state.operationsTerminalJobs, "ods.extensions.install-next");
+        const mutations = submissions.filter(([, s]) => s.actions?.some(a => a.action === "ods.extensions.install-next"));
+        if (params.action === "ods.extensions.inspect") {
+          if (submissions.length) return {block: true, blockReason: OPERATIONS_EXTENSION_LIFECYCLE_SEQUENCE_REASON};
+        } else if (!inspection || inspection.result.extensionId !== lifecycle.serviceId ||
+            !["ready", "dependencies_required", "pending"].includes(inspection.result.installationPrerequisites?.state) ||
+            mutations.length >= 256 || (mutations.length && latest?.result.state !== "pending")) {
+          return {block: true, blockReason: OPERATIONS_EXTENSION_LIFECYCLE_SEQUENCE_REASON};
+        }
+      }
+      if (lifecycle && lifecycle.action !== "install-next" && toolName === "pixel_ops_run") {
+        // Installing an existing inactive extension means starting its retained
+        // definition. Choose the exact action from the host inspection before
+        // creating a broker plan, never after that plan has been submitted.
+        if (lifecycle.action === "install" &&
+          ["ods.extensions.install", "ods.extensions.enable"].includes(params?.action)) {
+          const inspected = parsedLifecycleOutcome(state.operationsTerminalJobs, "ods.extensions.inspect");
+          const mutationSubmitted = [...state.operationsSubmittedJobs.values()].some(
+            (submission) => submission.actions?.some((entry) =>
+              entry.action !== "ods.extensions.inspect"));
+          if (!mutationSubmitted && inspected?.result.extensionId === lifecycle.serviceId &&
+            ["ready", "inspected"].includes(inspected.result.outcome) &&
+            ["disabled", "stopped"].includes(inspected.result.currentStatus)) {
+            lifecycle.action = "enable";
+            state.operationsRequiredActions.delete("ods.extensions.install");
+            state.operationsRequiredActions.add("ods.extensions.enable");
+            params = { ...params, action: "ods.extensions.enable" };
+          }
+        }
         const permittedLifecycleActions = new Set([
           "ods.extensions.inspect",
           `ods.extensions.${lifecycle.action}`,
@@ -7648,10 +7845,18 @@ export function createToolLoopGuard({
             (submission) => submission.actions?.some((entry) => entry.action === params.action)
           );
           if (alreadySubmitted) {
-            return {
-              block: true,
-              blockReason: OPERATIONS_EXTENSION_LIFECYCLE_SEQUENCE_REASON,
-            };
+            const mutation = parsedLifecycleOutcome(state.operationsTerminalJobs,
+              `ods.extensions.${lifecycle.action}`);
+            const inspections = [...state.operationsSubmittedJobs.entries()].filter(
+              ([, submission]) => submission.actions?.some((entry) => entry.action === "ods.extensions.inspect"));
+            const lastInspection = parsedLifecycleOutcome(state.operationsTerminalJobs, "ods.extensions.inspect");
+            const canReconcile = params.action === "ods.extensions.inspect" &&
+              mutation?.result.outcome === "pending" &&
+              inspections.every(([id]) => state.operationsTerminalJobs.has(id)) &&
+              lastInspection && !inspectionAlreadySatisfiesLifecycleAction(lastInspection, `ods.extensions.${lifecycle.action}`);
+            if (!canReconcile) {
+              return { block: true, blockReason: OPERATIONS_EXTENSION_LIFECYCLE_SEQUENCE_REASON };
+            }
           }
           if (params.action !== "ods.extensions.inspect") {
             const inspection = parsedLifecycleOutcome(
@@ -7660,7 +7865,7 @@ export function createToolLoopGuard({
             );
             if (
               !inspection ||
-              !["ready", "inspected"].includes(inspection.result.outcome) ||
+              !inspectionPermitsLifecycleAction(inspection, params.action) ||
               inspection.result.extensionId !== lifecycle.serviceId
             ) {
               return {
@@ -8949,6 +9154,14 @@ export function createToolLoopGuard({
       if (promotion) {
         state.exactDownloadPromotion = promotion;
         state.exactDownloadTerminalBlocks = 0;
+      }
+    }
+    if (state.githubCanonicalUrl) {
+      const submission = operationsSubmission(event, toolName);
+      if (submission) state.operationsSubmittedJobs.set(submission.jobId, submission);
+      if (toolName === "pixel_ops_job_get" || toolName === "pixel_ops_job_wait") {
+        const outcome = operationsTerminalOutcome(event, state.operationsSubmittedJobs);
+        if (repositoryObservationMatches(outcome, state.githubCanonicalUrl)) state.githubCanonicalSatisfied = true;
       }
     }
     if (

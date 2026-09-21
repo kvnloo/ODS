@@ -25,6 +25,11 @@ import PortalContextRing from '../components/PortalContextRing'
 import {compactCommand,CONTEXT_REQUEST_ID,historySnapshot,usePortalContext} from '../lib/portalContext'
 import PortalModelSelector from '../components/PortalModelSelector'
 import PortalAgentActivity from '../components/PortalAgentActivity'
+import PortalExtensionSetup from '../components/PortalExtensionSetup'
+import PortalExtensionProgress from '../components/PortalExtensionProgress'
+import useExtensionInstallation from '../hooks/useExtensionInstallation'
+import useGithubExtensionRequest from '../hooks/useGithubExtensionRequest'
+import { conversationProject } from '../lib/conversationProjects'
 import PortalStreamingText from '../components/PortalStreamingText'
 import PortalResponseActions from '../components/PortalResponseActions'
 import PortalResponseError from '../components/PortalResponseError'
@@ -571,6 +576,9 @@ export default function Pixel({ systemStatus = null }) {
   const stopRequestRef = useRef(null)
   const restoredActivityRef = useRef(restoredActivity)
   const chatIdRef = useRef(initialChat?.chatId || makeChatId())
+  const { state: extensionInstallation, start: startExtensionInstallation, stop: stopExtensionInstallation } = useExtensionInstallation(chatIdRef.current)
+  const { state: githubExtensionInstallation, start: startGithubExtensionRequest,
+    stop: stopGithubExtensionInstallation, resume: resumeGithubExtensionInstallation } = useGithubExtensionRequest(chatIdRef.current)
   useEffect(() => { setWorkspaceRequest(null); setWorkspaceExpanded(false) }, [chatIdRef.current])
   const contextStartRef = useRef(initialChat?.contextStart || 0)
   const compactionRequestRef = useRef(initialChat?.compactionRequestId || null)
@@ -927,6 +935,7 @@ export default function Pixel({ systemStatus = null }) {
     // this generation may update the response, workspace, or sending state.
     const isCurrentTurn = () => !controller.signal.aborted && abortRef.current === controller
     let latestAssistantText = ''
+    let extensionInstallationStarted = false
 
     async function streamAttempt(chatId, attemptConversation, snapshot) {
       let reader
@@ -992,6 +1001,11 @@ export default function Pixel({ systemStatus = null }) {
 
         reader = response.body?.getReader()
         if (!reader) throw new Error('stream unavailable')
+        if (!extensionInstallationStarted) {
+          extensionInstallationStarted = true
+          startExtensionInstallation(trimmed, controller.signal)
+          startGithubExtensionRequest(trimmed, { chatId, requestId }, controller.signal)
+        }
 
         const decoder = new TextDecoder()
         let buffer = ''
@@ -1186,7 +1200,7 @@ export default function Pixel({ systemStatus = null }) {
         void contextControl.refresh(true)
       }
     }
-  }, [input, messages, preview, workspaceOpen, sending, modelSwitching, status, restoredActive, restoredChecking, updateRestoredActivity, teams.busy, teams.start,compactConversation,contextControl.busy,contextControl.historyUnknown,contextControl.refresh])
+  }, [input, messages, preview, workspaceOpen, sending, modelSwitching, status, restoredActive, restoredChecking, updateRestoredActivity, teams.busy, teams.start,compactConversation,contextControl.busy,contextControl.historyUnknown,contextControl.refresh,startExtensionInstallation,startGithubExtensionRequest])
 
   const stopStreaming = useCallback(async () => {
     const controller = abortRef.current
@@ -1294,9 +1308,10 @@ export default function Pixel({ systemStatus = null }) {
     return () => window.removeEventListener(DELETE_EVENT, remove)
   }, [sending, restoredActive, restoredChecking, stopping, startNewChat, teams.busy,contextControl.busy])
 
-  const insertComposerText = useCallback(text => {
+  const insertComposerText = useCallback((text, { replace = false } = {}) => {
     if (sending || restoredActive || restoredChecking || stopping || contextControl.busy) return
     setInput(value => {
+      if (replace) return text
       const mode=agentCommand(text)?'agents':goalCommand(text)?'goal':null
       const task=(agentCommand(value) || goalCommand(value))?.task ?? (value==='/'?'':value)
       return mode ? `/${mode} ${task}` : appendComposerText(value, text)
@@ -1529,6 +1544,18 @@ export default function Pixel({ systemStatus = null }) {
               )}
               {message.role === 'assistant' && <PortalGoalPlan task={message.task} active={message.status==='streaming'} disabled={isDisabled || sending || restoredActive || restoredChecking} onResume={index===messages.length-1 && !message.questions ? ()=>sendMessage(continueGoal(messages,index)) : undefined}/>}
               {message.role === 'assistant' && <PortalAgentActivity task={message.task} active={message.status === 'streaming'} status={message.status}/> }
+              {message.role === 'assistant' && index === messages.length - 1 && messages[index - 1]?.role === 'user' &&
+                <PortalExtensionProgress key={`extension-progress/${chatIdRef.current}/${index}`}
+                  command={messages[index - 1].content} active={message.status === 'streaming'}
+                  installation={githubExtensionInstallation?.command === messages[index - 1].content ? githubExtensionInstallation : extensionInstallation}
+                  onStopInstallation={githubExtensionInstallation?.command === messages[index - 1].content ? stopGithubExtensionInstallation : stopExtensionInstallation}
+                  projectPath={conversationProject({messages, preview})?.path}/>}
+              {message.role === 'assistant' && message.status === 'done' && index === messages.length - 1 &&
+                messages[index - 1]?.role === 'user' && <PortalExtensionSetup key={`${chatIdRef.current}/${index}`}
+                  command={messages[index - 1].content} disabled={isDisabled || sending || restoredActive || restoredChecking}
+                  installation={githubExtensionInstallation}
+                  onConfigured={() => githubExtensionInstallation?.command === messages[index - 1].content
+                    ? resumeGithubExtensionInstallation() : sendMessage(messages[index - 1].content)}/>}
               {message.role === 'assistant' && message.content ? (
                 <>
                   {message.publication && <PixelSnapshotChanges preview={message.publication} before={message.beforePublication} variant="summary" onPreview={()=>openPublication(message.publication,'preview')} onReview={path=>openPublication(message.publication,'review',path)}/>}

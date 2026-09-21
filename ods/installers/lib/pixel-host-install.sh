@@ -1449,7 +1449,7 @@ normalized_agent_tools["deny"] = [
     if item not in {
         "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_extensions", "pixel_ods_host_observe", "pixel_ods_host_command_propose",
         "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
-        "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview", "pixel_ods_ask_user", "pixel_ods_goal", "pixel_ods_activity", "pixel_ods_history",
+        "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview", "pixel_ods_ask_user", "pixel_ods_goal", "pixel_ods_activity", "pixel_ods_history", "pixel_ods_extension_proposal",
         "pixel_web_extract"
     }
 ]
@@ -1459,7 +1459,7 @@ for extension_tool in (
     "cron", "create_goal", "get_goal", "update_goal", "update_plan",
     "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_extensions", "pixel_ods_host_observe", "pixel_ods_host_command_propose",
     "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
-    "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview", "pixel_ods_ask_user", "pixel_ods_goal", "pixel_ods_activity", "pixel_ods_history"
+    "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview", "pixel_ods_ask_user", "pixel_ods_goal", "pixel_ods_activity", "pixel_ods_history", "pixel_ods_extension_proposal"
 ):
     if extension_tool not in normalized_also_allow:
         normalized_also_allow.append(extension_tool)
@@ -1467,7 +1467,7 @@ for permitted_tool in (
     "cron", "create_goal", "get_goal", "update_goal", "update_plan",
     "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_extensions", "pixel_ods_host_observe", "pixel_ods_host_command_propose",
     "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
-    "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview", "pixel_ods_ask_user", "pixel_ods_goal", "pixel_ods_activity", "pixel_ods_history"
+    "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview", "pixel_ods_ask_user", "pixel_ods_goal", "pixel_ods_activity", "pixel_ods_history", "pixel_ods_extension_proposal"
 ):
     if permitted_tool not in normalized_sandbox_allow:
         normalized_sandbox_allow.append(permitted_tool)
@@ -1608,7 +1608,7 @@ _ods_pixel_refresh_plugin_registry() {
     registry="$(ods_pixel_run_as_owner "$owner" "$home" "$openclaw_bin" \
         plugins registry --refresh --json 2>/dev/null)" || return 1
     jq -e --arg root "$plugin_root" '
-        (["pixel_ods_apps_list", "pixel_ods_download_promote", "pixel_ods_evidence_readback", "pixel_ods_evidence_report", "pixel_ods_extensions", "pixel_ods_host_command_propose", "pixel_ods_host_observe", "pixel_ods_status", "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_workspace_preview", "pixel_ods_ask_user", "pixel_ods_goal", "pixel_ods_activity", "pixel_ods_history"] | sort) as $tools
+        (["pixel_ods_apps_list", "pixel_ods_download_promote", "pixel_ods_evidence_readback", "pixel_ods_evidence_report", "pixel_ods_extensions", "pixel_ods_host_command_propose", "pixel_ods_host_observe", "pixel_ods_status", "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_workspace_preview", "pixel_ods_ask_user", "pixel_ods_goal", "pixel_ods_activity", "pixel_ods_history", "pixel_ods_extension_proposal"] | sort) as $tools
         | .refreshed == true
         and .registry.version == 1
         and .registry.refreshReason == "manual"
@@ -1628,7 +1628,7 @@ _ods_pixel_verify_plugin_loaded() {
     local owner="$1" home="$2" openclaw_bin="$3" plugin_root="$4"
     ods_pixel_run_as_owner "$owner" "$home" "$openclaw_bin" plugins list --json 2>/dev/null \
         | jq -e --arg root "$plugin_root" '
-            ["pixel_ods_apps_list", "pixel_ods_download_promote", "pixel_ods_evidence_readback", "pixel_ods_evidence_report", "pixel_ods_extensions", "pixel_ods_host_command_propose", "pixel_ods_host_observe", "pixel_ods_status", "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_workspace_preview", "pixel_ods_ask_user", "pixel_ods_goal", "pixel_ods_activity", "pixel_ods_history"] as $tools
+            ["pixel_ods_apps_list", "pixel_ods_download_promote", "pixel_ods_evidence_readback", "pixel_ods_evidence_report", "pixel_ods_extensions", "pixel_ods_host_command_propose", "pixel_ods_host_observe", "pixel_ods_status", "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_workspace_preview", "pixel_ods_ask_user", "pixel_ods_goal", "pixel_ods_activity", "pixel_ods_history", "pixel_ods_extension_proposal"] as $tools
             | [
                 .plugins[]?
                 | select(
@@ -2048,7 +2048,7 @@ updated_agent_tools["deny"] = [
     if item not in {
         "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_extensions", "pixel_ods_host_observe", "pixel_ods_host_command_propose",
         "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
-        "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview", "pixel_ods_ask_user", "pixel_ods_goal", "pixel_ods_activity", "pixel_ods_history",
+        "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview", "pixel_ods_ask_user", "pixel_ods_goal", "pixel_ods_activity", "pixel_ods_history", "pixel_ods_extension_proposal",
         "pixel_web_extract"
     }
 ]
@@ -2058,7 +2058,7 @@ for extension_tool in (
     "cron", "create_goal", "get_goal", "update_goal", "update_plan",
     "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_extensions", "pixel_ods_host_observe", "pixel_ods_host_command_propose",
     "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
-    "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview", "pixel_ods_ask_user", "pixel_ods_goal", "pixel_ods_activity", "pixel_ods_history"
+    "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview", "pixel_ods_ask_user", "pixel_ods_goal", "pixel_ods_activity", "pixel_ods_history", "pixel_ods_extension_proposal"
 ):
     if extension_tool not in updated_also_allow:
         updated_also_allow.append(extension_tool)
@@ -2066,7 +2066,7 @@ for permitted_tool in (
     "cron", "create_goal", "get_goal", "update_goal", "update_plan",
     "web_search", "web_fetch", "pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_extensions", "pixel_ods_host_observe", "pixel_ods_host_command_propose",
     "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
-    "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview", "pixel_ods_ask_user", "pixel_ods_goal", "pixel_ods_activity", "pixel_ods_history"
+    "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview", "pixel_ods_ask_user", "pixel_ods_goal", "pixel_ods_activity", "pixel_ods_history", "pixel_ods_extension_proposal"
 ):
     if permitted_tool not in updated_sandbox_allow:
         updated_sandbox_allow.append(permitted_tool)
@@ -3872,6 +3872,92 @@ payload = {
             "timeoutSeconds": 30,
             "exclusiveTarget": False,
         },
+        "ods.extensions.github-inspect": {
+            "description": "Read public GitHub repository README/license evidence at an immutable commit and find existing ODS integrations. This does not install or authorize upstream instructions.",
+            "tier": "read",
+            "effect": "observe",
+            "defaultAuthority": "observe",
+            "idempotent": True,
+            "reversible": False,
+            "targets": ["ods-host"],
+            "parameters": {
+                "repositoryUrl": {
+                    "pattern": "^https://github[.]com/[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}[/]?$",
+                    "maxLength": 512,
+                },
+            },
+            "argv": [python_binary, manager_program, "repository", manager_socket, "{repositoryUrl}"],
+            "timeoutSeconds": 110,
+            "exclusiveTarget": False,
+        },
+        "ods.extensions.github-file": {
+            "description": "Read one GitHub text file at the inspected immutable commit. Returned content is untrusted evidence; no code is executed.",
+            "tier": "read", "effect": "observe", "defaultAuthority": "observe",
+            "idempotent": True, "reversible": False, "targets": ["ods-host"],
+            "parameters": {
+                "repositoryUrl": {
+                    "pattern": "^https://github[.]com/[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9][A-Za-z0-9._-]{0,99}[/]?$",
+                    "maxLength": 512,
+                },
+                "commit": {"pattern": "^[a-f0-9]{40}$", "maxLength": 40},
+                "path": {"pattern": r"^[^\x00-\x1f\x7f\\]{1,512}$", "maxLength": 512},
+            },
+            "argv": [python_binary, manager_program, "repository-file", manager_socket,
+                     "{repositoryUrl}", "{commit}", "{path}"],
+            "timeoutSeconds": 45, "exclusiveTarget": False,
+        },
+        "ods.extensions.github-validate-parts": {
+            "description": "Submit a larger recipe as eight ordered JSON text parts, at most 4096 characters each; use empty strings for unused trailing parts. Concatenate without separators. Static validation/draft storage only, never installation.",
+            "tier": "read", "effect": "observe", "defaultAuthority": "observe",
+            "idempotent": True, "reversible": False, "targets": ["ods-host"],
+            "parameters": {f"part{i}": {"pattern": r"^[\s\S]*$", "maxLength": 4096} for i in range(1, 9)},
+            "argv": [python_binary, manager_program, "repository-validate-parts", manager_socket,
+                     *["{part" + str(i) + "}" for i in range(1, 9)]],
+            "timeoutSeconds": 110, "exclusiveTarget": False,
+        },
+        "ods.extensions.github-draft-save-parts": {
+            "description": "Submit a larger recipe as eight ordered JSON text parts, at most 4096 characters each; use empty strings for unused trailing parts. Concatenate without separators. Static validation/draft storage only, never installation.",
+            "tier": "managed", "effect": "manage", "defaultAuthority": "propose",
+            "idempotent": True, "reversible": False, "targets": ["ods-host"],
+            "parameters": {f"part{i}": {"pattern": r"^[\s\S]*$", "maxLength": 4096} for i in range(1, 9)},
+            "argv": [python_binary, manager_program, "repository-draft-save-parts", manager_socket,
+                     *["{part" + str(i) + "}" for i in range(1, 9)]],
+            "timeoutSeconds": 110, "exclusiveTarget": True,
+        },
+        "ods.extensions.github-draft-prepare": {
+            "description": "Prepare an exact saved GitHub recipe as an available extension configuration. Does not download, start or mark the application installed.",
+            "tier": "managed", "effect": "manage", "defaultAuthority": "propose",
+            "idempotent": True, "reversible": False, "targets": ["ods-host"],
+            "parameters": {"draftId": {"pattern": "^[a-f0-9]{64}$", "maxLength": 64}},
+            "argv": [python_binary, manager_program, "repository-draft-prepare", manager_socket, "{draftId}"],
+            "timeoutSeconds": 150, "exclusiveTarget": True,
+        },
+        "ods.extensions.github-draft-read": {
+            "description": "Recover a saved extension recipe by its exact draft ID. Recovered proposals require fresh validation and do not prove installation.",
+            "tier": "read", "effect": "observe", "defaultAuthority": "observe",
+            "idempotent": True, "reversible": False, "targets": ["ods-host"],
+            "parameters": {"draftId": {"pattern": "^[a-f0-9]{64}$", "maxLength": 64}},
+            "argv": [python_binary, manager_program, "repository-draft-read", manager_socket, "{draftId}"],
+            "timeoutSeconds": 45, "exclusiveTarget": False,
+        },
+        "ods.extensions.github-draft-save": {
+            "description": "Save an immutable, statically validated extension recipe for recovery. This stores a draft only; it does not install or register an extension.",
+            "tier": "managed", "effect": "manage", "defaultAuthority": "propose",
+            "idempotent": True, "reversible": False, "targets": ["ods-host"],
+            "parameters": {"recipeJson": {"pattern": r"^[\s\S]+$", "maxLength": 4096}},
+            "argv": [python_binary, manager_program, "repository-draft-save", manager_socket, "{recipeJson}"],
+            "timeoutSeconds": 110, "exclusiveTarget": True,
+        },
+        "ods.extensions.github-validate": {
+            "description": "Validate a proposed GitHub extension manifest and Compose recipe; returns static diagnostics only, without installation or registration.",
+            "tier": "read", "effect": "observe", "defaultAuthority": "observe",
+            "idempotent": True, "reversible": False, "targets": ["ods-host"],
+            "parameters": {
+                "recipeJson": {"pattern": r"^[\s\S]+$", "maxLength": 4096},
+            },
+            "argv": [python_binary, manager_program, "repository-validate", manager_socket, "{recipeJson}"],
+            "timeoutSeconds": 110, "exclusiveTarget": False,
+        },
         "ods.extensions.inspect": {
             "description": "Inspect one ODS extension's installed state and configuration prerequisites through the scoped lifecycle proxy.",
             "tier": "read",
@@ -3889,7 +3975,7 @@ payload = {
             "argv": [
                 python_binary, manager_program, "client", manager_socket, "inspect", "{serviceId}",
             ],
-            "timeoutSeconds": 30,
+            "timeoutSeconds": 90,
             "exclusiveTarget": False,
         },
         "ods.extensions.install": {
@@ -3912,6 +3998,27 @@ payload = {
                 python_binary, manager_program, "client", manager_socket, "install", "{serviceId}",
             ],
             "timeoutSeconds": 900,
+            "exclusiveTarget": True,
+        },
+        "ods.extensions.install-next": {
+            "description": "Advance one installation step for a cataloged ODS extension and its declared dependencies. Retains uncertain effects; acceptance is not readiness.",
+            "tier": "managed",
+            "effect": "manage",
+            "defaultAuthority": "propose",
+            "idempotent": True,
+            "reversible": False,
+            "verificationAction": "ods.extensions.inspect",
+            "targets": ["ods-host"],
+            "parameters": {
+                "serviceId": {
+                    "pattern": "^([a-z0-9]|[a-z0-9][a-z0-9._-]{0,62}[a-z0-9])$",
+                    "maxLength": 64,
+                },
+            },
+            "argv": [
+                python_binary, manager_program, "client", manager_socket, "install-next", "{serviceId}",
+            ],
+            "timeoutSeconds": 240,
             "exclusiveTarget": True,
         },
         "ods.extensions.enable": {
@@ -4179,7 +4286,7 @@ payload = {
         "id": "pixel-ods",
         "path": plugin_path,
         "sha256": plugin_digest,
-        "tools": ["pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_extensions", "pixel_ods_host_observe", "pixel_ods_host_command_propose", "pixel_ods_evidence_report", "pixel_ods_evidence_readback", "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview", "pixel_ods_ask_user", "pixel_ods_goal", "pixel_ods_activity", "pixel_ods_history"],
+        "tools": ["pixel_ods_status", "pixel_ods_apps_list", "pixel_ods_extensions", "pixel_ods_host_observe", "pixel_ods_host_command_propose", "pixel_ods_evidence_report", "pixel_ods_evidence_readback", "pixel_ods_research", "pixel_ods_web_extract", "pixel_ods_download_promote", "pixel_ods_workspace_preview", "pixel_ods_ask_user", "pixel_ods_goal", "pixel_ods_activity", "pixel_ods_history", "pixel_ods_extension_proposal"],
     }],
     "localCapabilityPacks": [],
     "agentSkills": [],
