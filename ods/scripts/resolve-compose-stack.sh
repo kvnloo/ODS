@@ -286,9 +286,80 @@ def _extension_build_context(compose_path, build):
         raise ValueError("build must belong to an installed extension")
     if isinstance(build, str):
         build = {"context": build}
-    if not isinstance(build, dict) or set(build) - {"context", "dockerfile", "target", "args"}:
+    if not isinstance(build, dict):
         raise ValueError("unsupported build options")
     context = build.get("context", ".")
+    if isinstance(context, str) and context.startswith("https://github.com/"):
+        # The API publishes commit-bound GitHub recipes. Preserve their remote
+        # context across Windows/Linux/macOS rather than treating it as a path.
+        # Revalidate the complete installed recipe before forwarding to Docker.
+        import hashlib
+        from urllib.parse import urlsplit
+        if set(build) - {"context", "dockerfile", "dockerfile_inline", "target"}:
+            raise ValueError("unsupported remote build options")
+        parsed = urlsplit(context)
+        match = re.fullmatch(r"/([A-Za-z0-9][A-Za-z0-9-]{0,38})/([A-Za-z0-9][A-Za-z0-9._-]{0,99})\.git", parsed.path)
+        revision, separator, subdir = parsed.fragment.partition(":")
+        if (parsed.netloc != "github.com" or parsed.query or not match
+                or not re.fullmatch(r"[a-f0-9]{40}", revision) or (separator and not subdir)):
+            raise ValueError("remote build requires an immutable public GitHub commit")
+        repository = "https://github.com/" + match[1] + "/" + match[2]
+        for name in ("upstream.json", "manifest.yaml", compose_path.name):
+            source = directory / name
+            if source.is_symlink() or not source.is_file() or source.stat().st_size > 524288:
+                raise ValueError("invalid installed recipe file")
+        upstream = json.loads((directory / "upstream.json").read_text(encoding="utf-8"))
+        manifest = yaml.safe_load((directory / "manifest.yaml").read_text(encoding="utf-8"))
+        compose = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+        if (not isinstance(upstream, dict) or upstream.get("origin") != "github-proposal"
+                or not isinstance(upstream.get("repository"), str)
+                or upstream["repository"].rstrip("/").removesuffix(".git").lower() != repository.lower()
+                or upstream.get("commit") != revision):
+            raise ValueError("remote build does not match installed provenance")
+        if not isinstance(manifest, dict) or not isinstance(compose, dict) or not isinstance(compose.get("services"), dict):
+            raise ValueError("invalid source recipe documents")
+        candidate = {"repository": upstream["repository"], "commit": revision, "manifest": manifest, "compose": compose}
+        digest = hashlib.sha256(json.dumps(candidate, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+        if upstream.get("recipeDigest") != digest:
+            raise ValueError("installed source recipe changed")
+        dockerfile = build.get("dockerfile", "Dockerfile")
+        for value, required in ((subdir, False), (dockerfile, True)):
+            if (not isinstance(value, str) or len(value) > 256 or (required and not value)
+                    or (value and any(not re.fullmatch(r"[A-Za-z0-9_.-]+", part)
+                                      or part in {".", ".."} for part in value.split("/")))):
+                raise ValueError("Dockerfile must stay inside the source context")
+        target = build.get("target")
+        if target is not None and (not isinstance(target, str) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", target)):
+            raise ValueError("invalid build target")
+        inline = build.get("dockerfile_inline")
+        if "dockerfile_inline" in build and ("dockerfile" in build or not isinstance(inline, str)
+                or not inline.strip() or len(inline.encode("utf-8")) > 24576
+                or any(ord(char) < 32 and char not in "\n\r\t" for char in inline)
+                or "$" in re.findall(r"\$\$|\$", inline)):
+            raise ValueError("invalid inline Dockerfile")
+        receipts = upstream.get("sourceFiles")
+        if not isinstance(receipts, list):
+            raise ValueError("missing source build evidence")
+        matched = False
+        for service_name, service in compose["services"].items():
+            if not isinstance(service, dict) or service.get("build") != build:
+                continue
+            matched = True
+            if service.get("image") != f"ods-source-{service_name}:{revision}" or service.get("pull_policy") != "never":
+                raise ValueError("source image must be owned and commit-bound")
+            receipt = next((item for item in receipts if isinstance(item, dict) and item.get("service") == service_name), None)
+            if inline is not None:
+                expected = {"service": service_name, "kind": "proposed-dockerfile", "sha256": hashlib.sha256(inline.encode("utf-8")).hexdigest()}
+                if receipt != expected:
+                    raise ValueError("inline Dockerfile evidence changed")
+            elif (not isinstance(receipt, dict) or receipt.get("path") != "/".join(filter(None, (subdir, dockerfile)))
+                    or not isinstance(receipt.get("blob"), str) or not re.fullmatch(r"[a-f0-9]{40}", receipt["blob"])):
+                raise ValueError("upstream Dockerfile evidence changed")
+        if not matched:
+            raise ValueError("source build absent from installed recipe")
+        return context
+    if set(build) - {"context", "dockerfile", "target", "args"}:
+        raise ValueError("unsupported build options")
     if not isinstance(context, str) or "$" in context or ("\\" in context and os.name != "nt"):
         raise ValueError("invalid build context")
     # The API stages files in its /data mount. Resolve that precise alias on
@@ -364,7 +435,7 @@ def _scan_user_compose_content(compose_path):
         if "build" in svc_def:
             try:
                 build_contexts[svc_name] = {"build": {"context": _extension_build_context(compose_path, svc_def["build"])}}
-            except (ValueError, OSError) as exc:
+            except (ValueError, OSError, yaml.YAMLError) as exc:
                 reject(f"service '{svc_name}' build rejected: {exc}")
         user = svc_def.get("user")
         if user is not None and str(user).split(":")[0] in ("root", "0"):
