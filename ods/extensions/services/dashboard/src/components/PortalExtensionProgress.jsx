@@ -7,10 +7,11 @@ const labels = {none: 'Ready', install: 'Waiting to install', enable: 'Waiting t
   wait: 'Installing', blocked: 'Needs attention'}
 
 export default function PortalExtensionProgress({command, active = false, projectPath, installation, onStopInstallation}) {
-  const boundTarget = installation?.command === command && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(installation.target || '')
+  const boundTarget = installation && installation.command === command && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(installation.target || '')
     ? installation.target : undefined
   const target = extensionSetupTarget(command) || boundTarget
-  const installState = installation && installation.target === target ? installation.state : undefined
+  const installState = installation && installation.command === command && installation.target === target ? installation.state : undefined
+  const canAssociate = installState === 'succeeded'
   const installing = installState === 'pending'
   const mentionedProjects = typeof command === 'string' ? command.match(/Playground\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}/g) || [] : []
   const associationProject = mentionedProjects.some(path => path !== projectPath) ? undefined : projectPath
@@ -39,7 +40,7 @@ export default function PortalExtensionProgress({command, active = false, projec
               (s.action === 'wait' && !['installing', 'setting_up'].includes(s.status)))) throw new Error('plan')
         if (!alive) return
         setPlan(next); setError(false)
-        if (next.steps.every(s => s.action === 'none') && /^Playground\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(associationProject || '')) {
+        if (canAssociate && next.steps.every(s => s.action === 'none') && /^Playground\/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(associationProject || '')) {
           const identity = `${target}/${projectPath}`
           if (linked.current !== identity) {
             try {
@@ -66,7 +67,7 @@ export default function PortalExtensionProgress({command, active = false, projec
     }
     load()
     return () => { alive = false; clearTimeout(timer); clearTimeout(timeout); controller.abort() }
-  }, [target, active, installing, revision, projectPath, associationProject])
+  }, [target, active, installing, canAssociate, revision, projectPath, associationProject])
   if (!target && installation?.command === command && installation.state === 'reconciliation_required') {
     return <section className="portal-extension-progress" aria-label="Extension installation progress">
       <p role="status">The extension recipe could not be confirmed. Review the result before trying again.</p>

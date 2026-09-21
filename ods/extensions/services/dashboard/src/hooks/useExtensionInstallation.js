@@ -56,17 +56,17 @@ export default function useExtensionInstallation(chatId) {
   const start = useCallback((command, parentSignal) => {
     const target = extensionSetupTarget(command)
     if (!target || parentSignal?.aborted) return
-    if (current.current?.target === target && !current.current.controller.signal.aborted) return
+    if (current.current?.target === target && current.current.command === command && !current.current.controller.signal.aborted) return
     current.current?.controller.abort()
     const controller = new AbortController()
-    const run = { target, controller }
+    const run = { target, command, controller }
     current.current = run
     const abort = () => {
       controller.abort()
-      if (current.current === run) setState({ target, state: 'reconciliation_required' })
+      if (current.current === run) setState({ target, command, state: 'reconciliation_required' })
     }
     parentSignal?.addEventListener('abort', abort, { once: true })
-    const report = value => { if (current.current === run && !controller.signal.aborted) setState(value) }
+    const report = value => { if (current.current === run && !controller.signal.aborted) setState({ ...value, command }) }
     report({ target, state: 'pending' })
     advanceCatalogInstallation(target, controller.signal, report).catch(() => {
       report({ target, state: 'reconciliation_required' })

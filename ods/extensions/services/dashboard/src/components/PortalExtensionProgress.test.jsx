@@ -62,7 +62,8 @@ test('links an observed project only after extension readiness is confirmed', as
     extensionId: 'demo', scope: 'project-association', projects: ['Playground/project'],
   }))
   vi.stubGlobal('fetch', fetcher)
-  render(<PortalExtensionProgress command="/extensions @demo" projectPath="Playground/project"/>)
+  render(<PortalExtensionProgress command="/extensions @demo" projectPath="Playground/project"
+    installation={{command: '/extensions @demo', target: 'demo', state: 'succeeded'}}/>)
   expect(await screen.findByText('Linked to Playground/project')).toBeInTheDocument()
   expect(fetcher.mock.calls[1][0]).toBe('/api/extensions/demo/projects')
   expect(JSON.parse(fetcher.mock.calls[1][1].body)).toEqual({project: 'Playground/project'})
@@ -76,3 +77,14 @@ test('does not link the old project when the owner names a different one', async
   expect(fetcher).toHaveBeenCalledTimes(1)
   expect(screen.queryByText(/Linked to/)).not.toBeInTheDocument()
 })
+
+test.each([undefined, {command: '/extensions @demo for another task', target: 'demo', state: 'succeeded'},
+  {command: '/extensions @demo', target: 'demo', state: 'pending'}])(
+  'history and unrelated installation receipts cannot associate a project: %j', async installation => {
+    const fetcher = vi.fn().mockResolvedValue(response(plan('none', 'enabled')))
+    vi.stubGlobal('fetch', fetcher)
+    render(<PortalExtensionProgress command="/extensions @demo" projectPath="Playground/project" installation={installation}/>)
+    expect(await screen.findByText('1/1 ready')).toBeInTheDocument()
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(fetcher.mock.calls[0][1].method).toBeUndefined()
+  })
