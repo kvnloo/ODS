@@ -151,3 +151,27 @@ def test_proposal_route_saves_only_for_active_matching_owner_request(monkeypatch
     assert result['installationStarted'] is False
     assert response.headers['cache-control'] == 'no-store'
     assert not (tmp_path / 'library').exists() and not (tmp_path / 'user').exists()
+
+
+def test_active_routing_is_owner_chat_and_expiry_scoped(tmp_path):
+    from extension_requests import active_chat_request
+    create_request(tmp_path, 'owner', 'chat', 'original', COMMAND, now=100)
+    assert active_chat_request(tmp_path, 'owner', 'chat', now=101)['requestId'] == 'original'
+    assert active_chat_request(tmp_path, 'another-owner', 'chat', now=101) is None
+    assert active_chat_request(tmp_path, 'owner', 'another-chat', now=101) is None
+    assert active_chat_request(tmp_path, 'owner', 'chat', now=100 + TTL_SECONDS) is None
+    cancel_request(tmp_path, 'owner', 'chat', 'original', now=102)
+    assert active_chat_request(tmp_path, 'owner', 'chat', now=103) is None
+
+
+def test_verified_followup_routing_preserves_original_scope_and_user_message():
+    from extension_requests import model_request_context
+    from routers import pixel
+    history = [{'role': 'user', 'content': 'sim'}]
+    body = pixel.ChatStreamRequest(chat_id='chat', request_id='followup', messages=history)
+    context = model_request_context(COMMAND, 'chat', 'original')
+    result = pixel._edge_chat_body(body, history, extension_context=context)
+    assert result['messages'][0] == context
+    assert result['messages'][1] == history[0]
+    assert 'original' in result['messages'][0]['content']
+    assert 'does not grant execution authority' in result['messages'][0]['content']

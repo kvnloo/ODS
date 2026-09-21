@@ -1402,6 +1402,45 @@ async def extension_install_next(service_id: str, api_key: str = Depends(verify_
         raise HTTPException(status_code=409, detail="Installation state requires inspection") from exc
 
 
+async def chat_extension_request_context(owner, chat_id, request_id, command):
+    """Register routing before inference; recover it from storage on follow-ups."""
+    from extension_requests import (active_chat_request, command_repository, create_request,
+                                    model_request_context, cancel_request)
+
+    def resolve():
+        directory = _extensions_lock_path().parent.resolve() / '.extension-requests'
+        try:
+            command_repository(command)
+            explicit = True
+        except ValueError:
+            explicit = False
+        if explicit:
+            with _extensions_lock():
+                if directory.is_symlink():
+                    raise ValueError('Invalid request storage')
+                directory.mkdir(exist_ok=True)
+                current = create_request(directory, owner, chat_id, request_id, command)
+        else:
+            # Ordinary chat must not wait on an installation's global lock.
+            # Atomic records are routing hints; proposal submission revalidates
+            # the live request under the lock before accepting any change.
+            if not directory.exists():
+                return None
+            try:
+                current = active_chat_request(directory, owner, chat_id)
+            except (ValueError, OSError, KeyError, TypeError):
+                return None  # Unavailable hints must not break ordinary chat.
+            if current and isinstance(command, str) and command.lstrip().startswith('/'):
+                with _extensions_lock():
+                    cancel_request(directory, owner, chat_id, current['requestId'])
+                return None
+        if not current or current['state'] != 'pending':
+            return None
+        return model_request_context('/extensions ' + current['repository'],
+                                     current['chatId'], current['requestId'])
+    return await asyncio.to_thread(resolve)
+
+
 @router.post("/api/extensions/github/requests")
 async def extension_github_request(request: Request, api_key: str = Depends(verify_api_key)):
     from extension_requests import create_request, read_request, cancel_request

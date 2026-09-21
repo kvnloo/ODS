@@ -102,3 +102,15 @@ test('changing chats cancels only the original chat and turn', async () => {
   expect(JSON.parse(fetcher.mock.calls[1][1].body)).toEqual({ action: 'cancel', ...identity })
   view.unmount()
 })
+
+
+test('ordinary follow-ups preserve the pending GitHub request without creating another scope', async () => {
+  const fetcher = vi.fn().mockResolvedValue(response(receipt))
+  vi.stubGlobal('fetch', fetcher)
+  const view = renderHook(() => useGithubExtensionRequest('chat'))
+  await act(async () => view.result.current.start(command, identity))
+  await act(async () => view.result.current.start('sim', { ...identity, requestId: 'next' }))
+  expect(fetcher).toHaveBeenCalledTimes(1)
+  expect(view.result.current.state.state).toBe('researching')
+  view.unmount()
+})

@@ -783,7 +783,7 @@ async def _retained_chat_stream(request, body, owner):
         raise HTTPException(status_code=507, detail=str(exc)) from None
     if created:
         begin_pixel_stream()
-        task = asyncio.create_task(_produce_retained_result(store, identity, body, config, messages))
+        task = asyncio.create_task(_produce_retained_result(store, identity, body, config, messages, owner=owner))
         _result_tasks[identity] = task
         def release(finished):
             _result_tasks.pop(identity, None)
@@ -822,7 +822,7 @@ async def _retained_chat_stream(request, body, owner):
     })
 
 
-async def _produce_retained_result(store, identity, body, config, messages):
+async def _produce_retained_result(store, identity, body, config, messages, *, owner=None):
     edge_url, key = config
     done_seen = False
     answer_seen = False
@@ -833,11 +833,16 @@ async def _produce_retained_result(store, identity, body, config, messages):
     stopped = False
     rejected = False
     try:
+        extension_context = None
+        if owner is not None and body.messages and body.messages[-1].role == 'user':
+            from routers.extensions import chat_extension_request_context
+            extension_context = await chat_extension_request_context(
+                owner, body.chat_id, body.request_id, body.messages[-1].content)
         timeout = httpx.Timeout(connect=5.0, read=_CHAT_STREAM_TIMEOUT_SECONDS, write=30.0, pool=5.0)
         async with async_timeout(_CHAT_STREAM_TIMEOUT_SECONDS):
             async with httpx.AsyncClient(timeout=timeout, trust_env=False, follow_redirects=False) as client:
                 async with client.stream("POST", f"{edge_url}/v1/chat/completions",
-                        json=_edge_chat_body(body, messages),
+                        json=_edge_chat_body(body, messages, extension_context=extension_context),
                         headers=_edge_headers(key, accept="text/event-stream")) as upstream:
                     rejected = 400 <= upstream.status_code < 500
                     if upstream.status_code != 200 or not upstream.headers.get("content-type", "").lower().startswith("text/event-stream"):
@@ -931,10 +936,10 @@ async def _produce_retained_result(store, identity, body, config, messages):
             store.finish(identity, state)
 
 
-def _edge_chat_body(body, messages):
+def _edge_chat_body(body, messages, *, extension_context=None):
     from extension_requests import model_request_context
     latest = body.messages[-1] if body.messages else None
-    context = model_request_context(latest.content, body.chat_id, body.request_id) if latest and latest.role == 'user' else None
+    context = extension_context or (model_request_context(latest.content, body.chat_id, body.request_id) if latest and latest.role == 'user' else None)
     if context:
         position = next((index for index, item in enumerate(messages) if item['role'] != 'system'), len(messages))
         messages = [*messages[:position], context, *messages[position:]]

@@ -103,9 +103,15 @@ export default function useGithubExtensionRequest(chatId) {
   useEffect(() => { stop(); return stop }, [chatId, stop])
   const start = useCallback((command, identity, signal) => {
     if (current.current?.requestId === identity?.requestId && current.current?.chatId === identity?.chatId) return
-    stop()
     const repository = githubExtensionRepository(command)
-    if (!repository || signal?.aborted || !identity?.chatId || !identity?.requestId) return
+    if (!repository) {
+      // Keep the original request scope for conversational follow-ups. The
+      // backend supplies its verified routing identity to the next model turn.
+      if (typeof command === 'string' && command.trimStart().startsWith('/')) stop()
+      return
+    }
+    if (signal?.aborted || !identity?.chatId || !identity?.requestId) return
+    stop()
     const run = { ...identity, repository, command, signal, cancel: stop, controller: new AbortController() }
     current.current = run
     signal?.addEventListener('abort', run.cancel, { once: true })

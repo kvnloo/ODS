@@ -56,10 +56,29 @@ export function createExtensionProposalTool(context, {submit = submitExtensionPr
     async execute(_id, args) {
       const error = {isError: true, content: [{type: 'text', text: 'The proposal could not be bound to the current extension request. No installation was started. Check the request and recipe before retrying.'}]};
       try {
-        if (!exact(args, ['chatId', 'requestId', 'candidate']) || !ID.test(args.chatId) || !ID.test(args.requestId)
-            || context.sessionKey !== PREFIX + createHash('sha256').update(args.chatId).digest('hex')
-            || !exact(args.candidate, ['repository', 'commit', 'manifest', 'compose'])
-            || Buffer.byteLength(JSON.stringify(args.candidate)) > 32768) return error;
+        const invalid = text => ({isError: true, content: [{type: 'text', text: text + ' No proposal was submitted.'}]});
+        if (!exact(args, ['chatId', 'requestId', 'candidate'])) {
+          return invalid('Use exactly chatId, requestId and candidate. Obtain the routing IDs from the current extension request context; candidate must contain repository, commit, manifest and compose.');
+        }
+        if (typeof args.chatId !== 'string' || typeof args.requestId !== 'string' ||
+            !ID.test(args.chatId) || !ID.test(args.requestId) ||
+            context.sessionKey !== PREFIX + createHash('sha256').update(args.chatId).digest('hex')) {
+          return invalid('The routing identity does not match this conversation. Use the exact chatId and requestId supplied by the active extension request; do not invent replacements.');
+        }
+        if (!exact(args.candidate, ['repository', 'commit', 'manifest', 'compose'])) {
+          return invalid('candidate requires exactly repository, commit, manifest and compose. A repository link alone is not an installation recipe. Inspect its actual build files before proposing a recipe.');
+        }
+        const {repository, commit, manifest, compose} = args.candidate;
+        if (typeof repository !== 'string' || typeof commit !== 'string' || !/^[a-f0-9]{40}$/.test(commit)) {
+          return invalid('Use the selected repository URL and its verified full 40-character commit SHA. Branch names, tags and pull-request refs are not immutable commits.');
+        }
+        if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) ||
+            !compose || typeof compose !== 'object' || Array.isArray(compose)) {
+          return invalid('manifest and compose must be JSON objects describing the researched ODS integration, not file paths or YAML strings.');
+        }
+        if (Buffer.byteLength(JSON.stringify(args.candidate)) > 32768) {
+          return invalid('The candidate exceeds the 32 KiB recipe limit. Reduce unnecessary content while preserving the complete installation configuration; do not truncate JSON.');
+        }
         const result = await submit({schemaVersion: 1, action: 'github-request-propose', ...args});
         if (result?.schemaVersion !== 1 || result.kind !== 'ods-extension-request-proposal'
             || result.chatId !== args.chatId || result.requestId !== args.requestId

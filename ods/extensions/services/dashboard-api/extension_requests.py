@@ -38,7 +38,13 @@ def model_request_context(command, chat_id, request_id):
             'chatId': chat_id, 'requestId': request_id, 'repository': repository,
         }, sort_keys=True) + '. Use these exact identifiers when a request-scoped extension '
         'proposal tool is available. Research the requested repository and submit its actual '
-        'installation recipe; preserve the owner\'s requirements. This context does not grant '
+        'installation recipe when the owner asks to proceed; preserve their requirements. '
+        'For research-only requests, explain the findings before proposing installation. '
+        'Use pixel_ods_extension_proposal with chatId, requestId and candidate containing '
+        'repository, immutable commit, manifest and compose. Describe that tool if needed. '
+        'Installing packages in the agent sandbox does not register an ODS extension. '
+        'A follow-up message can continue this request, but unrelated chat is not permission '
+        'to advance it. This context does not grant '
         'execution authority: the backend must confirm an active owner request and matching '
         'validated recipe before proceeding. A saved or available recipe is not an installed application.'
     )}
@@ -112,6 +118,23 @@ def read_request(directory, owner, chat_id, request_id, *, now=None):
     return {'schemaVersion': 1, 'id': identifier, 'chatId': chat_id, 'requestId': request_id,
             'repository': record['repository'], 'state': state, 'expiresAt': record['expiresAt'],
             'installationStarted': False, **({'proposal': proposal} if proposal is not None else {})}
+
+
+def active_chat_request(directory, owner, chat_id, *, now=None):
+    """Recover only the authenticated owner's one still-live request."""
+    owner_digest, _ = _identity(owner, chat_id, 'lookup')
+    current = None
+    for path in _directory(directory).glob('*.json'):
+        record = _read(path)
+        if record.get('ownerDigest') != owner_digest or record.get('chatId') != chat_id:
+            continue
+        receipt = read_request(directory, owner, chat_id, record.get('requestId'), now=now)
+        if receipt['state'] != 'pending':
+            continue
+        if current is not None:
+            raise ValueError('Ambiguous active extension request')
+        current = receipt
+    return current
 
 
 def bind_proposal(directory, owner, chat_id, request_id, candidate, validation, draft, *, now=None):
