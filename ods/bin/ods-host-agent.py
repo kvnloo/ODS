@@ -9446,12 +9446,14 @@ class AgentHandler(BaseHTTPRequestHandler):
         ext_dir = USER_EXTENSIONS_DIR / sid
         if not ext_dir.is_dir():
             # Not a user extension — no-op (built-ins handled by installer).
-            json_response(self, 200, {"status": "ok", "service_id": sid, "synced": []})
+            json_response(self, 200, {"status": "ok", "service_id": sid, "synced": [],
+                                       "preserve_existing": preserve_existing})
             return
 
         ext_config = ext_dir / "config"
         if not ext_config.is_dir():
-            json_response(self, 200, {"status": "ok", "service_id": sid, "synced": []})
+            json_response(self, 200, {"status": "ok", "service_id": sid, "synced": [],
+                                       "preserve_existing": preserve_existing})
             return
 
         # Reject ANY symlink in the config/ tree (or if config/ itself is a
@@ -9513,6 +9515,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                 "service_id": sid,
                 "synced": [],
                 "skipped": out_of_scope,
+                "preserve_existing": preserve_existing,
             })
             return
         if not src_svc.is_dir():
@@ -9571,9 +9574,13 @@ class AgentHandler(BaseHTTPRequestHandler):
                         target_path = target / relative
                         if source_path.is_dir():
                             target_path.mkdir(parents=True, exist_ok=True)
-                        elif source_path.is_file() and not target_path.exists():
-                            target_path.parent.mkdir(parents=True, exist_ok=True)
-                            shutil.copy2(source_path, target_path)
+                        elif source_path.is_file():
+                            if target_path.exists():
+                                if not target_path.is_file():
+                                    raise OSError(f"Config target must be a file: {relative}")
+                            else:
+                                target_path.parent.mkdir(parents=True, exist_ok=True)
+                                shutil.copy2(source_path, target_path)
                 else:
                     shutil.copytree(
                         str(src_svc), str(target),

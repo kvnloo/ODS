@@ -1993,6 +1993,45 @@ class TestSyncExtensionConfigWire:
             server.server_close()
             thread.join(timeout=2)
 
+    @pytest.mark.parametrize("layout", ["absent", "no-config", "other-service", "file-conflict"])
+    def test_preserving_sync_noop_receipts_and_file_conflicts(self, tmp_path, monkeypatch, layout):
+        import threading
+        from http.server import HTTPServer
+
+        install_dir = tmp_path / "install"
+        user_root = install_dir / "data" / "user-extensions"
+        user_root.mkdir(parents=True)
+        if layout != "absent":
+            extension = user_root / "fakesvc"
+            extension.mkdir()
+            if layout == "other-service":
+                (extension / "config" / "another").mkdir(parents=True)
+            if layout == "file-conflict":
+                source = extension / "config" / "fakesvc"
+                source.mkdir(parents=True)
+                (source / "settings.yaml").write_text("setting: default", encoding="utf-8")
+                (install_dir / "config" / "fakesvc" / "settings.yaml").mkdir(parents=True)
+        monkeypatch.setattr(_mod, "INSTALL_DIR", install_dir)
+        monkeypatch.setattr(_mod, "USER_EXTENSIONS_DIR", user_root)
+        monkeypatch.setattr(_mod, "AGENT_API_KEY", "wire-test-secret")
+        server = HTTPServer(("127.0.0.1", 0), _mod.AgentHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            status, body = self._post(server.server_address[1], "fakesvc", preserve_existing=True)
+            if layout == "file-conflict":
+                assert status == 500
+                assert "must be a file" in body["error"]
+                assert (install_dir / "config" / "fakesvc" / "settings.yaml").is_dir()
+            else:
+                assert status == 200
+                assert body["preserve_existing"] is True
+                assert body["synced"] == []
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+
     def test_rejects_existing_symlink_in_config_target(
         self, tmp_path, monkeypatch,
     ):
