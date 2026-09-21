@@ -1,5 +1,5 @@
 import { act, renderHook } from '@testing-library/react'
-import useGithubExtensionRequest, { githubExtensionRepository, advanceGithubExtension } from './useGithubExtensionRequest'
+import useGithubExtensionRequest, { githubExtensionRepository, observeGithubExtension } from './useGithubExtensionRequest'
 
 const command = '/extensions https://github.com/Owner/Repo.git configure for my project'
 const identity = { chatId: 'chat', requestId: 'turn' }
@@ -10,28 +10,23 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
 
 const proposal = { draftId: 'a'.repeat(64), recipeDigest: 'b'.repeat(64), extensionId: 'example' }
 const proposed = { ...receipt, proposal }
-const prepared = { schemaVersion: 1, extensionId: 'example', recipeDigest: proposal.recipeDigest,
-  state: 'available', installationStarted: false, registered: false, runtimeVerified: false }
-const ready = { schemaVersion: 1, extensionId: 'example', state: 'succeeded', dispatched: false,
-  plan: { extensionId: 'example', steps: [{ extensionId: 'example', action: 'none', status: 'enabled' }] } }
+const observed = {schemaVersion:1,kind:'ods-extension-request-status',...identity,
+  extensionId:'example',requestState:'pending',proposalAccepted:true,prepared:true,runtimeStatus:'cli_installed'}
 
-test('validated proposal prepares exact request before normal coordinator confirms readiness', async () => {
-  const fetcher = vi.fn().mockResolvedValueOnce(response(prepared))
-    .mockResolvedValueOnce(response(proposed)).mockResolvedValueOnce(response(ready))
-  const report = vi.fn()
-  await advanceGithubExtension(receipt, proposed, new AbortController().signal, report, fetcher)
-  expect(fetcher.mock.calls.map(call => call[0])).toEqual([
-    '/api/extensions/github/requests/prepare', '/api/extensions/github/requests', '/api/extensions/example/install-next',
-  ])
+test('observes managed readiness without preparation or installation side effects', async () => {
+  const fetcher=vi.fn().mockResolvedValue(response(observed))
+  const report=vi.fn()
+  await observeGithubExtension(receipt,proposed,new AbortController().signal,report,fetcher)
+  expect(fetcher.mock.calls.map(call=>call[0])).toEqual(['/api/extensions/github/requests/status'])
   expect(JSON.parse(fetcher.mock.calls[0][1].body)).toEqual(identity)
-  expect(report).toHaveBeenLastCalledWith({ target: 'example', state: 'succeeded' })
+  expect(report).toHaveBeenLastCalledWith({target:'example',state:'succeeded'})
 })
 
 test('waits for proposal and cancellation prevents preparation or installation', async () => {
   vi.useFakeTimers()
   const controller = new AbortController()
   const fetcher = vi.fn().mockResolvedValue(response(receipt))
-  const pending = advanceGithubExtension(receipt, receipt, controller.signal, vi.fn(), fetcher)
+  const pending = observeGithubExtension(receipt, receipt, controller.signal, vi.fn(), fetcher)
   await vi.advanceTimersByTimeAsync(5000)
   expect(fetcher).toHaveBeenCalledTimes(1)
   controller.abort()
@@ -41,20 +36,25 @@ test('waits for proposal and cancellation prevents preparation or installation',
   expect(JSON.parse(fetcher.mock.calls[0][1].body).action).toBe('read')
 })
 
-test.each([{ state: 'cancelled' }, { proposal: { ...proposal, recipeDigest: 'c'.repeat(64) } }])(
-  'changed request cannot advance after recipe preparation: %j', async change => {
-    const fetcher = vi.fn().mockResolvedValueOnce(response(prepared)).mockResolvedValueOnce(response({ ...proposed, ...change }))
-    await expect(advanceGithubExtension(receipt, proposed, new AbortController().signal, vi.fn(), fetcher)).rejects.toThrow()
-    expect(fetcher).toHaveBeenCalledTimes(2)
-    expect(fetcher.mock.calls.some(call => call[0].endsWith('/install-next'))).toBe(false)
+test.each([{chatId:'other'},{extensionId:'other'},{prepared:false},{runtimeStatus:'invented'}])(
+  'rejects inconsistent observation without starting a replacement: %j', async change=>{
+    const fetcher=vi.fn().mockResolvedValue(response({...observed,...change}))
+    await expect(observeGithubExtension(receipt,proposed,new AbortController().signal,vi.fn(),fetcher)).rejects.toThrow()
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(fetcher.mock.calls[0][0]).toBe('/api/extensions/github/requests/status')
   })
 
-test('ambiguous preparation is not retried and cannot claim installation', async () => {
-  const fetcher = vi.fn().mockRejectedValue(new Error('acknowledgement lost'))
-  const report = vi.fn()
-  await expect(advanceGithubExtension(receipt, proposed, new AbortController().signal, report, fetcher)).rejects.toThrow()
+test('accepted draft remains observation-only while awaiting agent advancement', async()=>{
+  vi.useFakeTimers()
+  const controller=new AbortController()
+  const fetcher=vi.fn().mockResolvedValue(response({...observed,prepared:false,runtimeStatus:'not_observed'}))
+  const report=vi.fn()
+  const run=observeGithubExtension(receipt,proposed,controller.signal,report,fetcher)
+  await vi.advanceTimersByTimeAsync(0)
+  expect(report).toHaveBeenCalledWith({target:undefined,state:'prepared'})
+  controller.abort(); await run
   expect(fetcher).toHaveBeenCalledTimes(1)
-  expect(report).not.toHaveBeenCalledWith(expect.objectContaining({ state: 'succeeded' }))
+  expect(fetcher.mock.calls[0][0]).toBe('/api/extensions/github/requests/status')
 })
 
 test('parses only explicit repository commands, preserving the repository boundary', () => {
@@ -93,14 +93,15 @@ test('abort records cancellation before a slow creation response and never reviv
   view.unmount()
 })
 
-test('changing chats cancels only the original chat and turn', async () => {
+test('changing chats stops observation without cancelling the durable request', async () => {
   const fetcher = vi.fn().mockResolvedValue(response(receipt))
   vi.stubGlobal('fetch', fetcher)
   const view = renderHook(({ chat }) => useGithubExtensionRequest(chat), { initialProps: { chat: 'chat' } })
   await act(async () => view.result.current.start(command, identity))
   view.rerender({ chat: 'next' })
-  expect(JSON.parse(fetcher.mock.calls[1][1].body)).toEqual({ action: 'cancel', ...identity })
+  expect(fetcher).toHaveBeenCalledTimes(1)
   view.unmount()
+  expect(fetcher.mock.calls.some(([, options]) => JSON.parse(options.body).action === 'cancel')).toBe(false)
 })
 
 

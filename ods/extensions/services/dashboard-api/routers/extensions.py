@@ -1506,13 +1506,21 @@ async def chat_extension_request_context(owner, chat_id, request_id, command, *,
                     or candidate['manifest']['service']['id'] != current['proposal']['extensionId']):
                 raise ValueError('Bound proposal changed')
             revision = candidate['commit']
+            observation = {'runtimeStatus': 'not_observed', 'prepared': False}
+            try:
+                observation = await asyncio.wait_for(_observe_extension_request(
+                    {'chatId': current['chatId'], 'requestId': current['requestId']}, owner), timeout=16)
+            except (HTTPException, OSError, ValueError, asyncio.TimeoutError):
+                pass  # Unknown state never authorizes replaying an installation.
             context['content'] += ('\nODS durable request state: ' + json.dumps({
                 'requestId': current['requestId'], 'proposal': current['proposal'],
-                'commit': revision, 'proposalAccepted': True, 'runtimeVerified': False,
-                'installationState': 'not-observed',
+                'commit': revision, 'proposalAccepted': True,
+                'prepared': observation['prepared'],
+                'installationState': observation['runtimeStatus'],
             }, sort_keys=True) + '. This proposal is already accepted; do not submit a replacement '
                 'or install another copy in the agent workspace. This receipt establishes the '
-                'proposal only. Observe the managed installation before reporting its outcome. '
+                'saved proposal and observed runtime state, not every application behavior. '
+                'If installing or setting_up, observe the active operation instead of asking to start or starting another. '
                 'The current user message determines what work is authorized; this record is not '
                 'a new instruction or permission to install.')
         except (ValueError, OSError, KeyError, TypeError):
@@ -1579,16 +1587,11 @@ async def extension_github_request(request: Request, api_key: str = Depends(veri
     return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
 
-@router.post("/api/extensions/github/requests/status")
-async def extension_github_request_status(request: Request, api_key: str = Depends(verify_api_key)):
-    """Read one owner's proposal and observed runtime without advancing it."""
+async def _observe_extension_request(payload, api_key):
+    """Shared read-only observation for model context and the request API."""
     from extension_requests import read_request
     from extension_recipe_drafts import read_draft
     from extension_recipe_package import verify_package, recipe_digest
-    payload = await _github_recipe_payload(request)
-    if not isinstance(payload, dict) or set(payload) != {'chatId', 'requestId'}:
-        raise HTTPException(status_code=400, detail='Invalid extension request')
-
     def observe():
         with _extensions_lock():
             parent = _extensions_lock_path().parent.resolve()
@@ -1624,6 +1627,16 @@ async def extension_github_request_status(request: Request, api_key: str = Depen
                 result['runtimeStatus'] = status
         except (HTTPException, OSError, ValueError, asyncio.TimeoutError):
             pass  # Missing observation is never failure or success evidence.
+    return result
+
+
+@router.post("/api/extensions/github/requests/status")
+async def extension_github_request_status(request: Request, api_key: str = Depends(verify_api_key)):
+    """Read one owner's proposal and observed runtime without advancing it."""
+    payload = await _github_recipe_payload(request)
+    if not isinstance(payload, dict) or set(payload) != {'chatId', 'requestId'}:
+        raise HTTPException(status_code=400, detail='Invalid extension request')
+    result = await _observe_extension_request(payload, api_key)
     return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
 

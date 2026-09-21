@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { advanceCatalogInstallation } from './useExtensionInstallation'
 
 export function githubExtensionRepository(command) {
   const match = typeof command === 'string' && command.trim().match(/^(?:\/goal\s+)?\/extensions?\s+(https:\/\/github\.com\/[^\s]+)(?:\s|$)/i)
@@ -16,14 +15,14 @@ export function githubExtensionRepository(command) {
   } catch { return null }
 }
 
-async function requestScope(body, { signal, fetcher = fetch, prepare = false } = {}) {
+async function requestScope(body, { signal, fetcher = fetch, status = false } = {}) {
   const controller = new AbortController()
   const abort = () => controller.abort()
   signal?.addEventListener('abort', abort, { once: true })
   if (signal?.aborted) abort()
-  const timeout = setTimeout(abort, prepare ? 120000 : 15000)
+  const timeout = setTimeout(abort, 15000)
   try {
-    const response = await fetcher('/api/extensions/github/requests' + (prepare ? '/prepare' : ''), {
+    const response = await fetcher('/api/extensions/github/requests' + (status ? '/status' : ''), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body), cache: 'no-store', signal: controller.signal,
       keepalive: body.action === 'cancel',
@@ -54,7 +53,7 @@ const waitForProposal = signal => new Promise(resolve => {
   if (signal.aborted) finish()
 })
 
-export async function advanceGithubExtension(run, initialReceipt, signal, report, fetcher = fetch) {
+export async function observeGithubExtension(run, initialReceipt, signal, report, fetcher = fetch) {
   const identity = { chatId: run.chatId, requestId: run.requestId }
   let receipt = initialReceipt
   for (let attempt = 0; attempt < 720 && !signal.aborted; attempt++) {
@@ -65,42 +64,53 @@ export async function advanceGithubExtension(run, initialReceipt, signal, report
       receipt = await requestScope({ action: 'read', ...identity }, { signal, fetcher })
       continue
     }
-    const prepared = await requestScope(identity, { signal, fetcher, prepare: true })
+    // This observer never prepares or installs. The agent submits managed
+    // operations; opening or polling the interface cannot start one.
+    const observed = await requestScope(identity, { signal, fetcher, status: true })
     if (signal.aborted) return
-    if (prepared?.schemaVersion !== 1 || prepared.extensionId !== proposal.extensionId ||
-        prepared.recipeDigest !== proposal.recipeDigest || prepared.state !== 'available' ||
-        prepared.installationStarted !== false || prepared.registered !== false || prepared.runtimeVerified !== false) {
-      throw new Error('Recipe preparation could not be confirmed')
+    if (observed?.schemaVersion !== 1 || observed.kind !== 'ods-extension-request-status' ||
+        observed.chatId !== run.chatId || observed.requestId !== run.requestId ||
+        observed.extensionId !== proposal.extensionId || observed.requestState !== 'pending' ||
+        observed.proposalAccepted !== true || typeof observed.prepared !== 'boolean' ||
+        !['not_observed','enabled','cli_installed','disabled','stopped','not_installed','installing','setting_up','unhealthy','error','unavailable'].includes(observed.runtimeStatus) ||
+        (!observed.prepared && observed.runtimeStatus !== 'not_observed')) {
+      throw new Error('Extension observation could not be confirmed')
     }
-    report({ target: proposal.extensionId, state: 'pending' })
-    // The normal coordinator owns dependencies, configuration and durable
-    // host receipts. Recheck the live owner request before every advancement.
-    const scopedFetch = async (url, options) => {
-      const current = await requestScope({ action: 'read', ...identity }, { signal, fetcher })
-      verifyScope(current, run, proposal)
-      if (signal.aborted || options.signal?.aborted) throw new Error('Extension request cancelled')
-      return fetcher(url, options)
-    }
-    await advanceCatalogInstallation(proposal.extensionId, signal, report, scopedFetch)
-    return
+    const state = ['enabled','cli_installed'].includes(observed.runtimeStatus) ? 'succeeded'
+      : observed.runtimeStatus === 'error' ? 'failed'
+      : ['unhealthy','unavailable'].includes(observed.runtimeStatus) ? 'reconciliation_required'
+      : ['installing','setting_up'].includes(observed.runtimeStatus) ? 'pending' : 'prepared'
+    report({ target: observed.prepared ? proposal.extensionId : undefined, state })
+    if (['succeeded','failed','reconciliation_required'].includes(state)) return
+    await waitForProposal(signal)
+    if (signal.aborted) return
+    receipt = await requestScope({ action: 'read', ...identity }, { signal, fetcher })
+    verifyScope(receipt, run, proposal)
+
   }
-  if (!signal.aborted) throw new Error('Extension proposal was not received')
+  if (!signal.aborted) throw new Error('Extension observation timed out')
 }
 
 export default function useGithubExtensionRequest(chatId) {
   const current = useRef(null)
   const [state, setState] = useState(null)
-  const stop = useCallback(() => {
+  const detach = useCallback(() => {
     const run = current.current
-    setState(null)
-    if (!run) return
     current.current = null
+    setState(null)
+    if (!run) return null
     run.controller.abort()
     run.signal?.removeEventListener('abort', run.cancel)
-    // The backend records cancellation even if creation has not arrived yet.
-    void requestScope({ action: 'cancel', chatId: run.chatId, requestId: run.requestId }).catch(() => {})
+    return run
   }, [])
-  useEffect(() => { stop(); return stop }, [chatId, stop])
+  const stop = useCallback(() => {
+    const run = detach()
+    if (!run) return
+    // Only explicit cancellation changes durable request state. Navigation
+    // and component cleanup stop observation, not an authorized operation.
+    void requestScope({ action: 'cancel', chatId: run.chatId, requestId: run.requestId }).catch(() => {})
+  }, [detach])
+  useEffect(() => { detach(); return detach }, [chatId, detach])
   const start = useCallback((command, identity, signal) => {
     if (current.current?.requestId === identity?.requestId && current.current?.chatId === identity?.chatId) return
     const repository = githubExtensionRepository(command)
@@ -130,7 +140,7 @@ export default function useGithubExtensionRequest(chatId) {
     }
     const execute = async receipt => {
       if (current.current !== run) return
-      try { await advanceGithubExtension(run, receipt, run.controller.signal, report) }
+      try { await observeGithubExtension(run, receipt, run.controller.signal, report) }
       finally { run.busy = false }
     }
     run.busy = true

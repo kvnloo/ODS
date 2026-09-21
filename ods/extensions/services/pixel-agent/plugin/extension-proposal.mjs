@@ -51,17 +51,18 @@ export function createPythonLibraryProposalTool(context, dependencies = {}) {
   const parameters = {type:'object', additionalProperties:false, required:fields,
     properties:Object.fromEntries(fields.map(key => [key,
       key === 'chatId' || key === 'requestId' ? proposal.parameters.properties[key] : sourceRecipeSchema.properties[key]]))};
+  parameters.properties.description = sourceRecipeSchema.properties.description;
   parameters.properties.pythonVersion = {...parameters.properties.pythonVersion,
     description:'JSON string for a Python 3 minor version supported by inspected metadata, for example "3.12". Never send a number.'};
   parameters.properties.pythonImports = {...parameters.properties.pythonImports,
     description:'Actual Python module names used in upstream import statements, e.g. ["actual_package"]. ODS verifies that these modules import successfully after installing the pinned source.'};
   return {
     name:'pixel_ods_python_library_proposal', label:'Propose Python library installation',
-    description:'For a researched installable Python LIBRARY from the current /extensions GitHub request. Supply these eight flat fields only. Use its verified commit, supported Python version and actual import module names from upstream documentation/source. ODS installs the whole pinned checkout, checks dependencies and verifies imports outside the source directory. No Dockerfile, command, server port, healthcheck or questions. Saves a request-bound draft through the normal ODS validator; it does not report installation success. For custom system dependencies or a web/CLI application use pixel_ods_extension_proposal instead.',
+    description:'For a researched installable Python LIBRARY from the current /extensions GitHub request. Supply the eight required flat fields and optionally a factual description from repository evidence. Use its verified commit, supported Python version and actual import module names from upstream documentation/source. ODS installs the whole pinned checkout, checks dependencies and verifies imports outside the source directory. No Dockerfile, command, server port, healthcheck or questions. Saves a request-bound draft through the normal ODS validator; it does not report installation success. For custom system dependencies or a web/CLI application use pixel_ods_extension_proposal instead.',
     parameters,
     async execute(id, args) {
-      if (!exact(args,fields)) return {isError:true,content:[{type:'text',text:JSON.stringify({
-        error:'Supply exactly the eight documented flat fields for a Python library.', parameters, proposalSubmitted:false,
+      if (!exact(args,fields) && !exact(args,[...fields,'description'])) return {isError:true,content:[{type:'text',text:JSON.stringify({
+        error:'Supply the eight documented required fields; description is the only optional field.', parameters, proposalSubmitted:false,
       })}]};
       const {chatId, requestId, ...source} = args;
       return proposal.execute(id,{chatId,requestId,source:{...source,port:0,cliOnly:true}});

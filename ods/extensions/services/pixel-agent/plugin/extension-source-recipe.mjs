@@ -14,6 +14,7 @@ export const sourceRecipeSchema = {
     repository: {type: 'string'}, commit: {type: 'string', pattern: '^[a-f0-9]{40}$'},
     serviceId: {type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,63}$'},
     name: {type: 'string'},
+    description: {type:'string',minLength:1,maxLength:600,description:'Concise factual project purpose supported by the inspected repository. Do not claim installation, compatibility or verification status.'},
     dockerfile: {type: 'string', description: 'Observed repository-relative Dockerfile path. Use this OR dockerfileInline.'},
     dockerfileInline: {type: 'string', description: 'Complete project-specific Dockerfile if upstream has none. COPY the checked-out source and install that source, not a same-named registry package. Research dependencies and the actual entrypoint first. Shell dollars are escaped by ODS.'},
     pythonVersion: {type: 'string', pattern: '^3\\.(10|11|12|13|14)$', description: 'Alternative to dockerfile/dockerfileInline ONLY for an inspected installable Python project (pyproject.toml or setup.py). Choose a version supported by its metadata. ODS copies and pip-installs the entire pinned source and runs pip check. Supply the real application command, or pythonImports for a library. Projects needing extra OS packages or custom build steps must use a researched Dockerfile instead.'},
@@ -44,6 +45,8 @@ export function compileSourceRecipe(source) {
     command = ['python', '-c', `import importlib; [importlib.import_module(name) for name in ${JSON.stringify(modules)}]`];
   }
   const issues = [];
+  if (source.description !== undefined && (typeof source.description !== 'string' || !source.description.trim() || source.description.length > 600))
+    issues.push('description: expected a nonempty project summary up to 600 characters');
   if (typeof repository !== 'string' || !/^https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}\/?$/.test(repository))
     issues.push('repository: expected a public https://github.com/OWNER/REPO URL');
   if (typeof commit !== 'string' || !/^[a-f0-9]{40}$/.test(commit))
@@ -114,7 +117,7 @@ export function compileSourceRecipe(source) {
   };
   return {repository: canonicalRepository, commit,
     manifest: {schema_version: 'ods.services.v1', service: {
-      id: serviceId, name, type: 'docker', category: 'optional', compose_file: 'compose.yaml',
+      id: serviceId, name, ...(source.description !== undefined ? {description:source.description.trim()} : {}), type: 'docker', category: 'optional', compose_file: 'compose.yaml',
       port, health: healthPath, ...(cliOnly ? {startup_check: false, external_link: false}
         : {external_port_env: portVariable, external_port_default: port}),
     }}, compose: {services: {[serviceId]: service}},

@@ -269,7 +269,7 @@ def test_followup_recovers_bound_proposal_and_inspects_its_commit(monkeypatch, t
     assert draft['draftId'] in result['content']
     assert '"requestId": "original"' in result['content']
     assert '"proposalAccepted": true' in result['content']
-    assert '"installationState": "not-observed"' in result['content']
+    assert '"installationState": "not_observed"' in result['content']
     assert inspect.await_args.kwargs['revision'] == proposal['commit']
     inspect.reset_mock()
     assert asyncio.run(extensions.chat_extension_request_context('other', 'chat', 'followup',

@@ -209,3 +209,16 @@ test('invalid small-model library arguments identify fields without submitting o
   assert.equal(calls.length,1);
   assert.match(calls[0].candidate.compose.services.example.build.dockerfile_inline,/FROM python:3\.10-slim/);
 });
+
+
+test('library description becomes catalog metadata without changing runtime verification', async () => {
+  const calls=[];
+  const tool=createPythonLibraryProposalTool(context,{submit:async payload=>{calls.push(payload);return receipt;}});
+  const input={chatId:'chat',requestId:'turn',repository:'https://github.com/o/r',commit:'a'.repeat(40),
+    serviceId:'example',name:'Example',pythonVersion:'3.12',pythonImports:['example'],description:'A documented data parser.'};
+  assert.equal((await tool.execute('id',input)).isError,undefined);
+  assert.equal(calls[0].candidate.manifest.service.description,input.description);
+  assert.match(calls[0].candidate.compose.services.example.command[2],/import_module/);
+  for(const description of ['',{},'x'.repeat(601)]) assert.equal((await tool.execute('id',{...input,description})).isError,true);
+  assert.equal(calls.length,1);
+});

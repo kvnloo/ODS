@@ -94,3 +94,21 @@ def test_advance_resolves_only_unchanged_owner_bound_prepared_recipe(monkeypatch
     cancel_request(requests,'owner','chat','turn')
     with pytest.raises(extensions.HTTPException): call()
     assert advance.call_count==1
+
+@pytest.mark.parametrize('message', ['sim', 'pode seguir', 'como está indo?'])
+def test_followup_context_contains_original_request_and_observed_installation(monkeypatch, tmp_path, message):
+    requests = tmp_path / '.extension-requests'; requests.mkdir()
+    drafts = tmp_path / '.extension-recipe-drafts'; drafts.mkdir()
+    library = tmp_path / 'library'; library.mkdir()
+    proposal = candidate()
+    monkeypatch.setattr(extensions, '_extensions_lock_path', lambda: tmp_path / '.lock')
+    monkeypatch.setattr(extensions, 'EXTENSIONS_LIBRARY_DIR', library)
+    create_request(requests, 'owner', 'chat', 'original', '/extensions ' + proposal['repository'])
+    draft = save_draft(drafts, 'owner', proposal, evidence(proposal))
+    bind_proposal(requests, 'owner', 'chat', 'original', proposal, evidence(proposal), draft)
+    publish_package(library, proposal, evidence(proposal), upstream(proposal))
+    monkeypatch.setattr(extensions, 'extension_detail', AsyncMock(return_value={'status':'installing','private':'never-show'}))
+    result = asyncio.run(extensions.chat_extension_request_context('owner','chat','followup',message))
+    assert '"requestId": "original"' in result['content']
+    assert '"installationState": "installing"' in result['content']
+    assert 'never-show' not in result['content']
