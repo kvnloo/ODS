@@ -837,7 +837,7 @@ async def _produce_retained_result(store, identity, body, config, messages, *, o
         if owner is not None and body.messages and body.messages[-1].role == 'user':
             from routers.extensions import chat_extension_request_context
             extension_context = await chat_extension_request_context(
-                owner, body.chat_id, body.request_id, body.messages[-1].content)
+                owner, body.chat_id, body.request_id, body.messages[-1].content, include_evidence=True)
         timeout = httpx.Timeout(connect=5.0, read=_CHAT_STREAM_TIMEOUT_SECONDS, write=30.0, pool=5.0)
         async with async_timeout(_CHAT_STREAM_TIMEOUT_SECONDS):
             async with httpx.AsyncClient(timeout=timeout, trust_env=False, follow_redirects=False) as client:

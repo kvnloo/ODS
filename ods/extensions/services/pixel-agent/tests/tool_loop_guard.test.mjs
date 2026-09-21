@@ -190,6 +190,24 @@ function seedNamedPreview(guard) {
   return { write, params, details };
 }
 
+test('explicit GitHub extension requests cannot install in the sandbox through direct or deferred tools', () => {
+  const guard = createToolLoopGuard();
+  const context = {agentId:'pixel', runId:'extension-route', sessionId:'extension-session'};
+  guard.observeRun(context, 'pixel', {prompt:'/goal /extensions https://github.com/example/project install'});
+  for (const toolName of ['exec', 'write', 'sessions_spawn', 'pixel_ops_run']) {
+    assert.equal(guard.beforeToolCall({toolName, params:{}}, {...context,toolName}).block, true);
+    assert.equal(guard.beforeToolCall({toolName:'tool_call', params:{id:'openclaw:core:'+toolName,args:{}}}, {...context,toolName:'tool_call'}).block, true);
+  }
+  for (const toolName of ['tool_search','tool_describe','pixel_ods_extension_proposal','pixel_ods_ask_user']) {
+    const result = guard.beforeToolCall({toolName, params:{}}, {...context,toolName});
+    assert.notEqual(result?.blockReason?.includes('extension coordinator'), true);
+  }
+  const other = {...context,runId:'ordinary-route'};
+  guard.observeRun(other,'pixel',{prompt:'Inspect this GitHub project and run its unit tests.'});
+  const ordinary = guard.beforeToolCall({toolName:'exec',params:{command:'python -m pytest'}},{...other,toolName:'exec'});
+  assert.notEqual(ordinary?.blockReason?.includes('extension coordinator'),true);
+});
+
 test('malformed dispatch failures stop only their active run and retain its verified preview', () => {
   const aborted = [];
   const signalled = [];
@@ -15182,4 +15200,20 @@ test('an unacknowledged progress abort is retried at model end until confirmed',
   guard.observeModelEnd({},context);
   assert.deepEqual(attempts,[['session-retry','agent:pixel:retry'],['session-retry','agent:pixel:retry']]);
   assert.equal(guard.deliveryVerificationForRun('retry-abort').status,'failed');
+});
+
+test('native rejected calls with session-only persistence exhaust the owning run', () => {
+  const attempts = [];
+  const guard = createToolLoopGuard({abortRun: id => {attempts.push(id); return true;}});
+  const context = {agentId: 'pixel', runId: 'native-errors', sessionId: 'native-session',
+    sessionKey: 'agent:pixel:openai-user:ods-' + 'a'.repeat(64)};
+  guard.observeRun(context, 'pixel', {prompt: 'Install the requested extension'});
+  for (let i = 0; i < 4; i++) {
+    guard.toolResultPersist({message: {toolCallId: 'native-' + i, toolName: 'tool_call',
+      isError: true, content: [{type: 'text', text: 'Native validation rejected the call.'}]}},
+      {agentId: 'pixel', sessionKey: context.sessionKey});
+  }
+  guard.observeModelEnd({}, context);
+  assert.deepEqual(attempts, ['native-session']);
+  assert.equal(guard.deliveryVerificationForRun(context.runId).status, 'failed');
 });

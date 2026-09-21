@@ -149,3 +149,36 @@ async def inspect_repository(url, library, transport=None, *, existing_roots=(),
             'contentTrust': 'untrusted-upstream-evidence',
             'installationStarted': False, 'registered': False,
             'requiresRecipeReview': True}
+
+
+async def inspect_installation_layout(url, commit, transport=None):
+    """Bounded source metadata for recipe design, never an inferred installer."""
+    repository = repository_identity(url)
+    if not isinstance(commit, str) or not re.fullmatch('[a-f0-9]{40}', commit):
+        raise ValueError('An immutable revision is required')
+    async with httpx.AsyncClient(timeout=10, follow_redirects=False, transport=transport,
+            headers={'Accept': 'application/vnd.github+json', 'User-Agent': 'ODS-Extensions'}) as client:
+        entries = await _github_json(client, repository + '/contents?ref=' + commit)
+        if not isinstance(entries, list) or len(entries) > 1000:
+            raise ValueError('Repository layout is unavailable')
+        files = sorted(item['name'] for item in entries if isinstance(item, dict)
+            and item.get('type') == 'file' and isinstance(item.get('name'), str)
+            and re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', item['name'])
+            and item.get('path') == item['name'])
+    # Only names actually returned by GitHub are fetched. Missing packaging
+    # files are not fabricated or repeatedly probed by a small local model.
+    priority = ('Dockerfile', 'compose.yaml', 'docker-compose.yml', 'pyproject.toml', 'setup.py',
+                'package.json', 'Cargo.toml', 'go.mod', 'requirements.txt', 'Gemfile', 'pom.xml', 'build.gradle')
+    documents = []
+    remaining = 10000
+    for name in [name for name in priority if name in files][:3]:
+        evidence = await inspect_file(url, commit, name, transport=transport)
+        content = evidence['content'][:min(5000, remaining)]
+        remaining -= len(content)
+        documents.append({'path': name, 'blob': evidence['blob'], 'content': content,
+                          'truncated': len(content) < len(evidence['content'])})
+        if remaining <= 0:
+            break
+    return {'repository': 'https://github.com/' + repository, 'commit': commit,
+            'rootFiles': files[:128], 'rootFilesTruncated': len(files) > 128,
+            'documents': documents, 'contentTrust': 'untrusted-upstream-evidence'}

@@ -6489,6 +6489,18 @@ export function createToolLoopGuard({
     if (state?.progressBudget.exhausted) {
       return { block: true, blockReason: RUN_PROGRESS_STOP_REASON };
     }
+    // An explicit GitHub extension request installs through its request-bound
+    // coordinator. Sandbox exec/write cannot produce an installed ODS extension,
+    // even if the package command happens to succeed. Keep research and owner
+    // clarification available without permitting a second installation path.
+    if (state?.githubExtensionRequest && ![
+      'tool_search', 'tool_describe', 'pixel_ods_extension_proposal',
+      'pixel_ods_web_extract', 'pixel_ods_research', 'web_search', 'web_fetch',
+      'read', 'pixel_ods_ask_user', 'pixel_ods_goal', 'pixel_ods_activity',
+      'pixel_ods_history', 'session_status', 'memory_search', 'memory_get',
+    ].includes(delegatedName)) {
+      return {block: true, blockReason: 'This /extensions GitHub request installs through the ODS extension coordinator, not sandbox commands or separate Operations jobs. Research the repository with pixel_ods_web_extract; submit its researched Dockerfile and verification command with pixel_ods_extension_proposal using the current routing IDs. If the source is a library, use cliOnly with a real verification command. Do not run pip, create a venv, or install another copy in the workspace. After an accepted proposal, finish the response; the coordinator owns installation.'};
+    }
     const asksOwner = toolName === 'pixel_ods_ask_user' || (toolName === 'tool_call' && ['pixel_ods_ask_user','openclaw:pixel-ods:pixel_ods_ask_user'].includes(event?.params?.id));
     if (asksOwner || ['pixel_ods_goal','pixel_ods_activity'].includes(delegatedName)) return state?.clientCancelled ? {block:true,blockReason:CLIENT_CANCELLED_REASON} : undefined;
     if (state && !state.clientCancelled && !state.recursiveDeleteDenied && !state.unrequestedOperationsTerminal
@@ -8373,6 +8385,9 @@ export function createToolLoopGuard({
       const state = stateFor(runId);
       state.completionAssurance.begin(currentOwnerIntentText(event?.messages, event?.prompt), event);
       const ownerIntent=currentOwnerIntentText(event?.messages,event?.prompt);
+      if (/^\s*(?:\/goal\s+)?\/extensions?\s+https:\/\/github\.com\//i.test(ownerIntent ?? '')) {
+        state.githubExtensionRequest = true;
+      }
       if (ownerIntent) state.playgroundOwnerIntent = ownerIntent;
       if (ownerIntent) state.ownerQuestionIntent=requestsChoiceQuestion(ownerIntent);
       if (teamRole) {state.managedTeamWorker=true;state.managedTeamReadOnly=teamRole!=='Builder';state.managedTeamCoordinator=teamRole==='Coordinator';state.ownerQuestionIntent=teamQuestionIntent;}
@@ -9580,10 +9595,16 @@ export function createToolLoopGuard({
 
   function toolResultPersist(event, context, agentId = "pixel") {
     if (context?.agentId !== agentId) return undefined;
-    const toolCallId = context?.toolCallId ?? event?.toolCallId;
+    const toolCallId = context?.toolCallId ?? event?.toolCallId ?? event?.message?.toolCallId;
     const pending = pendingToolRuns.get(toolCallId);
     pendingToolRuns.delete(toolCallId);
-    const runId = pending?.runId ?? context?.runId ?? event?.runId;
+    // Native validation/loop rejections skip before_tool_call and persist with
+    // a sessionKey but no runId. Resolve only the currently owned session;
+    // otherwise these failures never consume the run's progress budget.
+    const active = typeof context?.sessionKey === 'string'
+      ? [...activeUsers.values()].find(item => item.sessionKey === context.sessionKey
+        && sessionRuns.get(item.sessionId) === item.runId) : undefined;
+    const runId = pending?.runId ?? context?.runId ?? event?.runId ?? active?.runId;
     const state = runs.get(runId);
     const continuation = trustedOperationsContinuation(state, runId);
     if (!event?.message || typeof event.message !== "object") {

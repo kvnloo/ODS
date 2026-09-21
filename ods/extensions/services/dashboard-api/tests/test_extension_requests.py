@@ -32,6 +32,39 @@ def test_old_extension_command_does_not_create_current_context():
     assert pixel._edge_chat_body(body, history)['messages'] == history
 
 
+def test_request_evidence_resolves_commit_without_forwarding_unbounded_documents(monkeypatch, tmp_path):
+    from routers import extensions
+    from unittest.mock import AsyncMock
+    inspect = AsyncMock(return_value={'repository': 'https://github.com/owner/repo', 'commit': 'a' * 40,
+        'archived': False, 'existingExtensionIds': [], 'licenseIdentifier': 'MIT',
+        'contentTrust': 'untrusted-upstream-evidence', 'evidenceScope': 'repository-documents-at-commit',
+        'readme': 'UNTRUSTED_DOCUMENT' * 20000})
+    monkeypatch.setattr('extension_github.inspect_repository', inspect)
+    monkeypatch.setattr('extension_github.inspect_installation_layout', AsyncMock(return_value={'documents': []}))
+    monkeypatch.setattr(extensions, '_extensions_lock_path', lambda: tmp_path / '.lock')
+    result = asyncio.run(extensions.chat_extension_request_context('owner', 'chat', 'turn', COMMAND,
+        include_evidence=True))
+    assert 'a' * 40 in result['content']
+    assert 'UNTRUSTED_DOCUMENT' not in result['content']
+    assert 'pixel_ods_extension_proposal' in result['content']
+    inspect.assert_awaited_once()
+    inspect.reset_mock()
+    assert asyncio.run(extensions.chat_extension_request_context('owner', 'different', 'turn', 'hello',
+        include_evidence=True)) is None
+    inspect.assert_not_awaited()
+
+
+def test_unavailable_repository_evidence_preserves_request_but_does_not_fabricate_revision(monkeypatch, tmp_path):
+    from routers import extensions
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr('extension_github.inspect_repository', AsyncMock(side_effect=ValueError('upstream failure')))
+    monkeypatch.setattr(extensions, '_extensions_lock_path', lambda: tmp_path / '.lock')
+    result = asyncio.run(extensions.chat_extension_request_context('owner', 'chat', 'turn', COMMAND,
+        include_evidence=True))
+    assert 'revision could not be verified' in result['content']
+    assert 'upstream failure' not in result['content']
+
+
 def test_missing_request_id_does_not_invent_an_execution_scope():
     from extension_requests import model_request_context
     assert model_request_context(COMMAND, 'chat', None) is None
@@ -151,6 +184,16 @@ def test_proposal_route_saves_only_for_active_matching_owner_request(monkeypatch
     assert result['installationStarted'] is False
     assert response.headers['cache-control'] == 'no-store'
     assert not (tmp_path / 'library').exists() and not (tmp_path / 'user').exists()
+
+    # An invalid recipe must yield actionable schema paths, not a misleading
+    # ownership conflict or an echo of untrusted rejected values.
+    proposal['manifest'] = {'private': 'sensitive-value'}
+    with pytest.raises(extensions.HTTPException) as failure:
+        asyncio.run(extensions.extension_github_request_proposal(request(), api_key='owner'))
+    assert failure.value.status_code == 422
+    assert failure.value.detail['code'] == 'recipe-validation-failed'
+    assert any(row['code'] == 'manifest-schema' for row in failure.value.detail['errors'])
+    assert 'sensitive-value' not in json.dumps(failure.value.detail)
 
 
 def test_active_routing_is_owner_chat_and_expiry_scoped(tmp_path):

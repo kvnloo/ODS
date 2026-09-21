@@ -3416,6 +3416,7 @@ class TestInstallProgress:
             "service_id": "aider",
             "status": "started",
             "phase_label": "Service started",
+            "exit_verified": True,
             "error": None,
             "started_at": now,
             "updated_at": now,
@@ -3428,10 +3429,10 @@ class TestInstallProgress:
         status = _compute_extension_status(ext, {})
         assert status == "cli_installed"
 
-    def test_status_cli_installed_for_oneshot_user_dir_compose(self, monkeypatch, tmp_path):
+    def test_oneshot_configuration_alone_does_not_prove_installation(self, monkeypatch, tmp_path):
         """Steady-state: a one-shot extension (port=0) installed under
         USER_EXTENSIONS_DIR with compose.yaml present should remain
-        'cli_installed' even when no recent progress file exists."""
+        'stopped' when no verified exit receipt exists."""
         from routers.extensions import _compute_extension_status
 
         user_dir = tmp_path / "user"
@@ -3451,7 +3452,18 @@ class TestInstallProgress:
         ext["port"] = 0  # one-shot CLI extension marker
         ext["startup_check"] = False
         status = _compute_extension_status(ext, {})
-        assert status == "cli_installed"
+        assert status == "stopped"
+
+    def test_cli_exit_evidence_survives_progress_cleanup(self, monkeypatch, tmp_path):
+        from routers.extensions import _cleanup_stale_progress, _read_progress
+        monkeypatch.setattr("routers.extensions.DATA_DIR", str(tmp_path))
+        directory = tmp_path / 'extension-progress'
+        directory.mkdir()
+        path = directory / 'verified-cli.json'
+        path.write_text(json.dumps({'service_id': 'verified-cli', 'status': 'started',
+            'updated_at': '2020-01-01T00:00:00+00:00', 'exit_verified': True}))
+        _cleanup_stale_progress()
+        assert _read_progress('verified-cli')['exit_verified'] is True
 
     def test_stale_progress_ignored(self, monkeypatch, tmp_path):
         """Progress file >1 hour old → _read_progress returns None."""

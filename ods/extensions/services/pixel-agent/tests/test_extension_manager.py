@@ -1099,6 +1099,24 @@ class RecipeValidationTests(unittest.TestCase):
                     manager._submit_request_proposal(self.env_path, 3002, json.dumps({**envelope, **changed}).encode())
             request.assert_not_called()
 
+    def test_scoped_recipe_diagnostics_are_value_free_and_bounded(self):
+        candidate = {**self.proposal(), 'manifest': {'service': {'id': 'example'}}}
+        envelope = {'schemaVersion': 1, 'action': 'github-request-propose',
+                    'chatId': 'chat', 'requestId': 'turn', 'candidate': candidate}
+        error = {'code': 'manifest-schema', 'path': 'manifest/required'}
+        with mock.patch.object(manager, '_read_env', return_value={'DASHBOARD_API_KEY': 'a' * 64}):
+            with mock.patch.object(manager, '_request_json', return_value=(422, {'detail': {
+                    'code': 'recipe-validation-failed', 'errors': [error]}})):
+                result = manager._submit_request_proposal(pathlib.Path('/unused-env'), 3002, json.dumps(envelope).encode())
+            self.assertEqual(result['state'], 'invalid-recipe')
+            self.assertEqual(result['errors'], [error])
+            self.assertFalse(result['installationStarted'])
+            for errors in ([{**error, 'value': 'secret'}], [{**error, 'path': 'unexpected\\nvalue'}], [error] * 33):
+                with mock.patch.object(manager, '_request_json', return_value=(422, {'detail': {
+                        'code': 'recipe-validation-failed', 'errors': errors}})):
+                    with self.assertRaises(manager.ManagerError):
+                        manager._submit_request_proposal(pathlib.Path('/unused-env'), 3002, json.dumps(envelope).encode())
+
     def test_owner_peer_can_propose_but_cannot_dispatch_lifecycle(self):
         self.env_path = pathlib.Path('/unused-test-env')
         connection = mock.Mock()

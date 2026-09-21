@@ -60,6 +60,35 @@ test('transport rejects oversized response rather than returning arbitrary manag
   await assert.rejects(pending, /unavailable/);
 });
 
+test('surfaces only bounded value-free diagnostics for this exact request', async () => {
+  const diagnostic = {...receipt, state: 'invalid-recipe', errors: [
+    {code: 'manifest-schema', path: 'manifest/required'},
+    {code: 'healthcheck-required', path: 'compose/services/healthcheck'},
+  ]};
+  const run = result => createExtensionProposalTool(context, {submit: async () => result}).execute('id', args);
+  const valid = await run(diagnostic);
+  assert.equal(valid.isError, true);
+  assert.match(valid.content[0].text, /healthcheck-required/);
+  for (const changed of [{chatId: 'other'}, {installationStarted: true},
+    {errors: [{code: 'manifest-schema', path: 'manifest', value: 'private-token'}]}]) {
+    const result = await run({...diagnostic, ...changed});
+    assert.doesNotMatch(result.content[0].text, /private-token|healthcheck-required/);
+  }
+});
+
+test('simple source proposals use the same scoped API and immutable recipe validation', async () => {
+  let submitted;
+  const tool = createExtensionProposalTool(context, {submit: async payload => { submitted = payload; return receipt; }});
+  const source = {repository: args.candidate.repository, commit: args.candidate.commit,
+    serviceId: 'example', name: 'Example', dockerfile: 'Dockerfile', port: 8080, healthPath: '/health',
+    healthcheck: ['CMD', 'curl', '-f', 'http://localhost:8080/health']};
+  assert.equal((await tool.execute('id', {chatId: 'chat', requestId: 'turn', source})).isError, undefined);
+  assert.equal(submitted.action, 'github-request-propose');
+  assert.equal(submitted.candidate.manifest.service.id, 'example');
+  assert.equal(submitted.candidate.compose.services.example.pull_policy, 'never');
+  assert.equal((await tool.execute('id', {...args, source})).isError, true);
+});
+
 for (const [platform, path] of [['darwin', '/private/var/lib/ods-pixel-manager/extension-manager.sock'], ['linux', '/run/ods-pixel-manager/extension-manager.sock']]) {
   test(`proposal reaches the native manager on ${platform}`, async () => {
     const socket = new EventEmitter();

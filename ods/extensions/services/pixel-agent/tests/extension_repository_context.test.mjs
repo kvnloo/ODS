@@ -53,10 +53,20 @@ test('GitHub installation guidance survives failed evidence reads and goal wrapp
       const context = createExtensionRepositoryContext({tool: {execute: async () => result}});
       const value = await context({prompt: `${prefix}/extensions https://github.com/a/b install`});
       assert.match(value, /pixel_ods_extension_proposal/);
-      assert.match(value, /ods\.extensions\.github-inspect/);
+      assert.match(value, /pixel_ods_web_extract/);
       assert.match(value, /do not also save, prepare or install/);
       assert.match(value, /Honor research-only requests/);
       assert.match(value, /sandbox does not register an ODS extension/);
     }
   }
+});
+
+test('large README is a bounded explicitly truncated evidence block', async () => {
+  const context = createExtensionRepositoryContext({tool: {execute: async () => ({
+    content: [{type: 'text', text: 'x'.repeat(100000) + 'OMITTED_END'}],
+  })}});
+  const value = await context({prompt: '/extensions https://github.com/a/b install'});
+  assert.match(value, /"truncated":true/);
+  assert.doesNotMatch(value, /OMITTED_END/);
+  assert.ok(value.length < 13000);
 });

@@ -107,7 +107,15 @@ def validate_recipe(candidate, schema, reserved_ids, scan_compose):
                 error('container-name-conflict', 'compose/services/container_name')
         primary = services.get(target, {})
         health = primary.get('healthcheck') if isinstance(primary, dict) else None
-        if (not isinstance(health, dict) or health.get('disable') is True or not health.get('test')
+        one_shot = service.get('port') == 0 and service.get('startup_check') is False
+        command = primary.get('command') if isinstance(primary, dict) else None
+        if one_shot:
+            if (not isinstance(command, list) or not command
+                    or not all(isinstance(arg, str) and arg and '\0' not in arg for arg in command)):
+                error('verification-command-required', 'compose/services/command')
+            if isinstance(primary, dict) and primary.get('restart') not in (None, 'no'):
+                error('one-shot-restart-forbidden', 'compose/services/restart')
+        elif (not isinstance(health, dict) or health.get('disable') is True or not health.get('test')
                 or health.get('test') in ('NONE', ['NONE'])):
             error('healthcheck-required', 'compose/services/healthcheck')
         for group in ('volumes', 'networks'):

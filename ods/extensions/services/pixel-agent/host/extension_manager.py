@@ -1000,6 +1000,19 @@ def _submit_request_proposal(env_path, port, payload):
     status, value = _request_json(port=port, credential=credential, method='POST',
         path='/api/extensions/github/requests/proposal', timeout=40,
         body={key: envelope[key] for key in ('chatId', 'requestId', 'candidate')})
+    if status == 422:
+        detail = value.get('detail')
+        errors = detail.get('errors') if isinstance(detail, dict) else None
+        if (isinstance(detail, dict) and detail.get('code') == 'recipe-validation-failed'
+                and isinstance(errors, list) and 1 <= len(errors) <= 32
+                and all(isinstance(item, dict) and set(item) == {'code', 'path'}
+                        and isinstance(item['code'], str) and re.fullmatch('[a-z-]{1,80}', item['code'])
+                        and isinstance(item['path'], str) and re.fullmatch('[A-Za-z0-9_/$.-]{1,256}', item['path'])
+                        for item in errors)):
+            return {'schemaVersion': 1, 'kind': 'ods-extension-request-proposal',
+                    'chatId': envelope['chatId'], 'requestId': envelope['requestId'],
+                    'state': 'invalid-recipe', 'errors': errors, 'installationStarted': False}
+        raise ManagerError('invalid recipe diagnostics')
     digest = hashlib.sha256(json.dumps(candidate, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
     proposal = value.get('proposal', {})
     if (status != 200 or value.get('schemaVersion') != 1

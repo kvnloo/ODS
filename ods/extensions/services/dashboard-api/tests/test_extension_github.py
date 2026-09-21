@@ -226,3 +226,23 @@ def test_file_endpoint_returns_no_store_and_redacts_upstream_errors(monkeypatch)
 def test_mutable_or_invalid_file_revisions_are_rejected(revision):
     with pytest.raises(ValueError):
         asyncio.run(inspect_file('https://github.com/owner/repo', revision, 'docker/compose.yaml'))
+
+
+def test_installation_layout_fetches_only_observed_files_and_bounds_evidence():
+    from extension_github import inspect_installation_layout
+    calls = []
+    def handler(request):
+        calls.append(request.url.path)
+        assert request.url.params['ref'] == 'a' * 40
+        if request.url.path.endswith('/contents'):
+            return httpx.Response(200, json=[{'name': name, 'path': name, 'type': 'file'}
+                for name in ('setup.py', 'requirements.txt', 'README.md')])
+        name = request.url.path.rsplit('/', 1)[1]
+        assert name in ('setup.py', 'requirements.txt')
+        return httpx.Response(200, json={**file_response(b'x' * 6000), 'path': name})
+    result = asyncio.run(inspect_installation_layout('https://github.com/owner/repo', 'a' * 40,
+        httpx.MockTransport(handler)))
+    assert len(calls) == 3
+    assert result['rootFiles'] == ['README.md', 'requirements.txt', 'setup.py']
+    assert all(doc['truncated'] and len(doc['content']) == 5000 for doc in result['documents'])
+    assert result['contentTrust'] == 'untrusted-upstream-evidence'

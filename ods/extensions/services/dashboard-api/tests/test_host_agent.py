@@ -25,6 +25,33 @@ sys.modules["ods_host_agent"] = _mod
 _spec.loader.exec_module(_mod)
 
 
+@pytest.mark.parametrize('exit_code,oom,success', [(0, False, True), (1, False, False), (0, True, False), (False, False, False)])
+def test_cli_success_requires_the_exact_container_exit_receipt(monkeypatch, exit_code, oom, success):
+    calls = []
+    def run(command, **kwargs):
+        calls.append(command)
+        if command[:2] == ['docker', 'compose']:
+            return types.SimpleNamespace(returncode=0, stdout='a' * 64, stderr='')
+        return types.SimpleNamespace(returncode=0, stdout=json.dumps({
+            'Status': 'exited', 'ExitCode': exit_code, 'OOMKilled': oom, 'Error': ''}), stderr='')
+    monkeypatch.setattr(_mod.subprocess, 'run', run)
+    result, _ = _mod._verify_one_shot_exit(['-p', 'ods'], 'specific-cli')
+    assert result is success
+    assert calls[0] == ['docker', 'compose', '-p', 'ods', 'ps', '-a', '-q', 'specific-cli']
+    assert calls[1][-1] == 'a' * 64
+
+
+def test_cli_running_is_not_a_successful_one_shot_exit(monkeypatch):
+    clock = iter([0, 0, 2])
+    monkeypatch.setattr(_mod.time, 'monotonic', lambda: next(clock))
+    monkeypatch.setattr(_mod.time, 'sleep', lambda seconds: None)
+    def run(command, **kwargs):
+        return types.SimpleNamespace(returncode=0, stdout=('a' * 64 if command[1] == 'compose'
+            else json.dumps({'Status': 'running', 'ExitCode': 0})), stderr='')
+    monkeypatch.setattr(_mod.subprocess, 'run', run)
+    assert _mod._verify_one_shot_exit([], 'specific-cli', timeout=1)[0] is False
+
+
 @pytest.mark.parametrize('build_exit', [0, 1])
 def test_install_prepares_only_dependency_images_and_surfaces_build_failure(monkeypatch, build_exit):
     config = {'services': {

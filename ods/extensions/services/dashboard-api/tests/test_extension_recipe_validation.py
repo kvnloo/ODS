@@ -41,6 +41,25 @@ def test_real_recipe_passes_without_installation_registration_or_provenance_clai
     assert paths and all(not path.exists() for path in paths)
 
 
+@pytest.mark.parametrize('command,restart,expected', [
+    (['answer', '--version'], 'no', None),
+    (None, 'no', 'verification-command-required'),
+    ('answer --version', 'no', 'verification-command-required'),
+    (['answer', '--version'], 'unless-stopped', 'one-shot-restart-forbidden'),
+])
+def test_portless_cli_requires_exit_verification_instead_of_a_server_probe(command, restart, expected):
+    value = candidate()
+    value['manifest']['service'].update(port=0, health='', startup_check=False)
+    primary = value['compose']['services']['apache-answer']
+    primary.pop('healthcheck', None)
+    primary.update(command=command, restart=restart)
+    result = validate_recipe(value, SCHEMA, set(), scan)
+    if expected is None:
+        assert result['valid'], result['errors']
+    else:
+        assert expected in {error['code'] for error in result['errors']}
+
+
 @pytest.mark.parametrize('change,code', [
     ({'image': 'apache/answer:latest'}, 'image-digest-required'),
     ({'privileged': True}, 'compose-policy-rejected'),

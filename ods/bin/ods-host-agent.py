@@ -5724,6 +5724,15 @@ def docker_compose_action(service_id: str, action: str) -> tuple:
             cmd, cwd=str(INSTALL_DIR),
             capture_output=True, text=True, timeout=timeout, env=compose_env,
         )
+        if result.returncode == 0 and action == 'start':
+            ext_dir = _find_ext_dir(service_id)
+            manifest = _read_manifest(ext_dir) if ext_dir else {}
+            definition = (manifest or {}).get('service', {})
+            if isinstance(definition, dict) and definition.get('port') == 0 and definition.get('startup_check', True) is False:
+                ok, error = _verify_one_shot_exit(flags, service_id, definition.get('startup_timeout', 60))
+                _write_progress(service_id, 'started' if ok else 'error', 'CLI verification complete' if ok else 'CLI verification failed',
+                                error=error or None, exit_verified=ok)
+                return ok, error
         return (True, "") if result.returncode == 0 else (False, result.stderr[:500])
     except subprocess.TimeoutExpired:
         return False, f"Docker compose operation timed out ({timeout}s)"
@@ -6387,7 +6396,7 @@ _BEARER_RE = re.compile(r"Bearer\s+[A-Za-z0-9._\-=+/]+", re.IGNORECASE)
 
 
 def _write_progress(service_id: str, status: str, phase_label: str = "",
-                    error: str | None = None) -> None:
+                    error: str | None = None, *, exit_verified: bool = False) -> None:
     """Atomically write install progress file."""
     progress_dir = DATA_DIR / "extension-progress"
     progress_dir.mkdir(parents=True, exist_ok=True)
@@ -6412,6 +6421,7 @@ def _write_progress(service_id: str, status: str, phase_label: str = "",
         "error": sanitized_error,
         "started_at": started_at,
         "updated_at": _iso_now(),
+        **({'exit_verified': True} if status == 'started' and exit_verified else {}),
     }
     tmp_file.write_text(json.dumps(data), encoding="utf-8")
     # os.replace (not os.rename) — Windows os.rename raises FileExistsError
@@ -6680,7 +6690,8 @@ def _enable_retry_work(service_id: str) -> None:
                 _write_progress(service_id, "error", "Start failed", error=msg)
                 return
 
-        _write_progress(service_id, "started", "Service started")
+        _write_progress(service_id, "started", "Service started",
+                        exit_verified=not startup_check and retry_service_def.get('port') == 0)
     except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
         logger.exception("Enable-retry failed for %s", service_id)
         _write_progress(service_id, "error", "Retry failed",
@@ -7040,6 +7051,31 @@ def _declared_docker_containers() -> dict[str, str]:
         if isinstance(name, str) and name.strip():
             containers[name.strip()] = service_id
     return containers
+
+
+def _verify_one_shot_exit(flags: list[str], service_id: str, timeout: int = 60) -> tuple[bool, str]:
+    """Compose accepting up -d is not evidence that a CLI command succeeded."""
+    timeout = timeout if type(timeout) is int and 1 <= timeout <= 600 else 60
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = subprocess.run(['docker', 'compose', *flags, 'ps', '-a', '-q', service_id],
+            cwd=str(INSTALL_DIR), capture_output=True, text=True, timeout=5)
+        ids = result.stdout.split() if result.returncode == 0 else []
+        if len(ids) == 1 and re.fullmatch(r'[a-f0-9]{12,64}', ids[0]):
+            observed = subprocess.run(['docker', 'inspect', '--format', '{{json .State}}', ids[0]],
+                capture_output=True, text=True, timeout=5)
+            if observed.returncode == 0:
+                try:
+                    state = json.loads(observed.stdout)
+                except (ValueError, TypeError):
+                    state = {}
+                if isinstance(state, dict) and state.get('Status') in ('exited', 'dead'):
+                    if (state.get('Status') == 'exited' and type(state.get('ExitCode')) is int
+                            and state['ExitCode'] == 0 and not state.get('OOMKilled') and not state.get('Error')):
+                        return True, ''
+                    return False, 'The CLI verification command exited unsuccessfully. Inspect the extension logs before retrying.'
+        time.sleep(1)
+    return False, 'The CLI verification command did not reach a confirmed successful exit.'
 
 
 def _prepare_install_images(flags: list[str], service_id: str) -> tuple[bool, str]:
@@ -10055,7 +10091,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                 # after init (one-shot setup containers, extensions whose
                 # value is purely the setup_hook) can opt out via the
                 # manifest's `service.startup_check: false`, in which
-                # case compose's 0 exit is taken as success.
+                # case portless CLI tools must instead prove a successful exit.
                 install_manifest = _read_manifest(ext_dir)
                 install_service_def = install_manifest.get("service", {}) if install_manifest else {}
                 if not isinstance(install_service_def, dict):
@@ -10066,9 +10102,16 @@ class AgentHandler(BaseHTTPRequestHandler):
                 # whose containers intentionally exit (init containers,
                 # extensions whose value is purely the setup_hook). Setting
                 # `service.startup_check: false` skips the running-state poll
-                # — compose up's clean exit is taken as success. Default is
+                # — portless CLI tools use exit verification below. Default is
                 # True so existing long-running services are unchanged.
                 startup_check = install_service_def.get("startup_check", True)
+
+                one_shot = not startup_check and install_service_def.get('port') == 0
+                if one_shot:
+                    ok, error = _verify_one_shot_exit(flags, service_id, install_service_def.get('startup_timeout', 60))
+                    if not ok:
+                        _write_progress(service_id, 'error', 'CLI verification failed', error=error)
+                        return
 
                 if startup_check:
                     # Per-extension startup deadline; manifests with heavy init
@@ -10104,7 +10147,7 @@ class AgentHandler(BaseHTTPRequestHandler):
                         return
 
                 # Step 4: Success
-                _write_progress(service_id, "started", "Service started")
+                _write_progress(service_id, "started", "Service started", exit_verified=one_shot)
 
                 # Step 5: Post-install core recreate (best-effort, non-fatal).
                 # Some extensions (e.g. openclaw) add overlay env to already-
