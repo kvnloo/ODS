@@ -47,3 +47,18 @@ The local Portal and catalog respond with HTTP 200 and 200 catalog entries.
 
 Catalog environment declarations now include the extension configuration keys;
 all 51 environment validation checks passed, including port range checks.
+
+## Complete-catalog audit follow-up
+
+The generated catalog still has 200 unique IDs and names. The strict audit of
+all 203 source definitions (including three intentionally excluded definitions)
+now reports zero errors and warnings. Legacy Aider preserves the upstream
+executable, uses the current ODS gateway model and runs only `--version` during
+installation. Piper declares its Wyoming/native-health contract. TCP services
+with HTTP startup checks disabled no longer receive a false `cli_installed`
+status. An ambiguous legacy Dify alias was removed.
+
+All 178 recipe-staging/audit tests and five focused CLI/TCP status regressions
+passed. The Fooocus immutable image is now recorded at its actual built-in
+path in the dependency lock; dependency-pin checks pass. These changes are
+applied to the local catalog/API without installing any catalog applications.

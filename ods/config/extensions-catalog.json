@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-21T03:28:13Z",
+  "generated_at": "2026-09-21T07:01:49Z",
   "schema_version": "1.0.0",
   "extensions": [
     {
@@ -53,7 +53,7 @@
     {
       "id": "aider",
       "name": "Aider",
-      "description": "AI pair programming tool that lets you edit code in your terminal using GPT-4 and Claude.",
+      "description": "Terminal pair programming against the active ODS model gateway, with project files mounted in /app.",
       "category": "optional",
       "gpu_backends": [
         "amd",
@@ -63,24 +63,13 @@
         "none"
       ],
       "compose_file": "compose.yaml",
-      "depends_on": [],
+      "depends_on": [
+        "litellm"
+      ],
       "port": 0,
       "external_port_default": 0,
       "health_endpoint": "",
-      "env_vars": [
-        {
-          "key": "OPENAI_API_KEY",
-          "required": false,
-          "default": "",
-          "description": "OpenAI API key (leave empty to use local LLM)"
-        },
-        {
-          "key": "ANTHROPIC_API_KEY",
-          "required": false,
-          "default": "",
-          "description": "Anthropic API key (leave empty to use local LLM)"
-        }
-      ],
+      "env_vars": [],
       "tags": [],
       "features": [
         {
@@ -106,7 +95,10 @@
             "aider"
           ],
           "setup_time": "~1 minute",
-          "priority": 11
+          "priority": 11,
+          "launch": {
+            "type": "none"
+          }
         }
       ],
       "startup_check": false,
@@ -8210,9 +8202,7 @@
       "description": "Fast and lightweight text-to-speech engine optimized for edge and low-resource devices.",
       "category": "optional",
       "gpu_backends": [
-        "amd",
-        "nvidia",
-        "apple"
+        "all"
       ],
       "compose_file": "compose.yaml",
       "depends_on": [],
@@ -8245,9 +8235,13 @@
             "piper-audio"
           ],
           "setup_time": "~1 minute",
-          "priority": 10
+          "priority": 10,
+          "launch": {
+            "type": "none"
+          }
         }
       ],
+      "startup_check": false,
       "configuration_scope": "declared-environment-keys"
     },
     {

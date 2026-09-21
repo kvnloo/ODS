@@ -316,14 +316,9 @@ def _sync_extension_config(service_id: str, *, preserve_existing: bool = False) 
 
 
 def _is_one_shot_extension(ext: dict) -> bool:
-    """Return whether the catalog entry represents a one-shot CLI/setup tool.
+    """Only portless tools can be CLI-only; TCP services still need health."""
+    return ext.get("port") == 0 and ext.get("startup_check", False) is False
 
-    Prefer the explicit catalog copy of ``service.startup_check: false``. Fall
-    back to ``port: 0`` for catalogs generated before that field was exposed.
-    """
-    if "startup_check" in ext:
-        return ext.get("startup_check") is False
-    return ext.get("port") == 0
 
 
 def _compute_extension_status(ext: dict, services_by_id: dict) -> str:

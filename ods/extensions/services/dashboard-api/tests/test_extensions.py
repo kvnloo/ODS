@@ -4394,3 +4394,19 @@ class TestUpdateHardening(TestUpdateExtension):
         assert ext_mod._call_agent_sync_config(
             "my-ext", preserve_existing=True,
         ) is True
+
+
+@pytest.mark.parametrize("health, expected", [(None, "stopped"), ("unhealthy", "unhealthy"), ("healthy", "enabled")])
+def test_tcp_native_health_is_not_mistaken_for_installed_cli(monkeypatch, tmp_path, health, expected):
+    from types import SimpleNamespace
+    from routers import extensions
+    directory = tmp_path / "user" / "valkey"
+    directory.mkdir(parents=True)
+    (directory / "compose.yaml").write_text("services: {}")
+    monkeypatch.setattr(extensions, "USER_EXTENSIONS_DIR", tmp_path / "user")
+    monkeypatch.setattr(extensions, "SERVICES", {})
+    monkeypatch.setattr(extensions, "_read_progress", lambda _: None)
+    ext = _make_catalog_ext("valkey")
+    ext.update(port=6379, startup_check=False, health_endpoint="")
+    states = {} if health is None else {"valkey": SimpleNamespace(status=health)}
+    assert extensions._compute_extension_status(ext, states) == expected

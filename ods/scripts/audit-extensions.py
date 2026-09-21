@@ -522,8 +522,10 @@ def validate_records(
                 path=record.manifest_path,
             )
 
+        one_shot = (record.service_type == "docker" and service.get("port") == 0
+                    and service.get("startup_check") is False and not service.get("health"))
         port = parse_positive_int(service.get("port"))
-        if port is None and not host_network and not socket_only:
+        if port is None and not host_network and not socket_only and not one_shot:
             record.add_issue("error", "service-port-invalid", "service.port must be a positive integer", path=record.manifest_path)
 
         health = str(service.get("health") or "")
@@ -769,7 +771,7 @@ def validate_records(
             if isinstance(definition, dict) and "healthcheck" in definition:
                 healthcheck_found = True
                 break
-        if native_health:
+        if native_health and not one_shot:
             # No HTTP probe exists: require an executable native probe on this
             # service, not merely a healthcheck stanza on a dependency.
             native_probe_found = False
@@ -791,7 +793,7 @@ def validate_records(
                     "docker services without HTTP health require an enabled native healthcheck",
                     path=source_paths.get("base", record.manifest_path),
                 )
-        if not healthcheck_found and record.category != "core":
+        if not healthcheck_found and record.category != "core" and not one_shot:
             record.add_issue(
                 "warning",
                 "healthcheck-missing",
