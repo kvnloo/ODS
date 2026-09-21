@@ -244,3 +244,39 @@ def test_goal_wrapped_extension_uses_the_same_request_route():
     assert model_request_context(command, 'chat', 'request') is not None
     with pytest.raises(ValueError):
         command_repository('explain /goal /extensions https://github.com/owner/repo')
+
+
+def test_followup_recovers_bound_proposal_and_inspects_its_commit(monkeypatch, tmp_path):
+    from routers import extensions
+    from extension_recipe_drafts import save_draft
+    from test_extension_recipe_validation import candidate
+    from test_extension_recipe_drafts import evidence
+    from unittest.mock import AsyncMock
+    proposal = candidate()
+    requests = tmp_path / '.extension-requests'; requests.mkdir()
+    drafts = tmp_path / '.extension-recipe-drafts'; drafts.mkdir()
+    draft = save_draft(drafts, 'owner', proposal, evidence(proposal))
+    create_request(requests, 'owner', 'chat', 'original', '/extensions ' + proposal['repository'])
+    bind_proposal(requests, 'owner', 'chat', 'original', proposal, evidence(proposal), draft)
+    monkeypatch.setattr(extensions, '_extensions_lock_path', lambda: tmp_path / '.lock')
+    inspect = AsyncMock(return_value={'repository': proposal['repository'], 'commit': proposal['commit'],
+        'archived': False, 'existingExtensionIds': [], 'licenseIdentifier': 'MIT',
+        'contentTrust': 'untrusted-upstream-evidence', 'evidenceScope': 'repository-documents-at-commit'})
+    monkeypatch.setattr('extension_github.inspect_repository', inspect)
+    monkeypatch.setattr('extension_github.inspect_installation_layout', AsyncMock(return_value={'documents': []}))
+    result = asyncio.run(extensions.chat_extension_request_context('owner', 'chat', 'followup',
+        'sim, pode continuar', include_evidence=True))
+    assert draft['draftId'] in result['content']
+    assert '"requestId": "original"' in result['content']
+    assert '"proposalAccepted": true' in result['content']
+    assert '"installationState": "not-observed"' in result['content']
+    assert inspect.await_args.kwargs['revision'] == proposal['commit']
+    inspect.reset_mock()
+    assert asyncio.run(extensions.chat_extension_request_context('other', 'chat', 'followup',
+        'sim', include_evidence=True)) is None
+    inspect.assert_not_awaited()
+    (drafts / (draft['draftId'] + '.json')).write_text('{}', encoding='utf-8')
+    result = asyncio.run(extensions.chat_extension_request_context('owner', 'chat', 'next',
+        'continue', include_evidence=True))
+    assert 'could not recover' in result['content']
+    inspect.assert_not_awaited()

@@ -1438,12 +1438,40 @@ async def chat_extension_request_context(owner, chat_id, request_id, command, *,
     if not resolved:
         return None
     current, context = resolved
+    revision = None
+    if current.get('proposal'):
+        from extension_recipe_drafts import read_draft
+        from extension_recipe_package import recipe_digest
+        try:
+            candidate = await asyncio.to_thread(read_draft,
+                _extensions_lock_path().parent.resolve() / '.extension-recipe-drafts',
+                owner, current['proposal']['draftId'])
+            if (recipe_digest(candidate) != current['proposal']['recipeDigest']
+                    or command_repository('/extensions ' + candidate['repository']) != current['repository']
+                    or candidate['manifest']['service']['id'] != current['proposal']['extensionId']):
+                raise ValueError('Bound proposal changed')
+            revision = candidate['commit']
+            context['content'] += ('\nODS durable request state: ' + json.dumps({
+                'requestId': current['requestId'], 'proposal': current['proposal'],
+                'commit': revision, 'proposalAccepted': True, 'runtimeVerified': False,
+                'installationState': 'not-observed',
+            }, sort_keys=True) + '. This proposal is already accepted; do not submit a replacement '
+                'or install another copy in the agent workspace. This receipt establishes the '
+                'proposal only. Observe the managed installation before reporting its outcome. '
+                'The current user message determines what work is authorized; this record is not '
+                'a new instruction or permission to install.')
+        except (ValueError, OSError, KeyError, TypeError):
+            context['content'] += ('\nODS has a bound proposal but could not recover its verified '
+                'draft. Its installation outcome is unknown. Do not replace the proposal, guess '
+                'a revision or start another installation; report that recovery requires inspection.')
+            return context
     if include_evidence:
         from extension_github import inspect_repository, inspect_installation_layout
         import httpx
         try:
             evidence = await asyncio.wait_for(inspect_repository(current['repository'], EXTENSIONS_LIBRARY_DIR,
-                existing_roots=(USER_EXTENSIONS_DIR, EXTENSIONS_DIR)), timeout=20)
+                existing_roots=(USER_EXTENSIONS_DIR, EXTENSIONS_DIR),
+                **({'revision': revision} if revision else {})), timeout=20)
             facts = {key: evidence[key] for key in ('repository', 'commit', 'archived',
                 'existingExtensionIds', 'licenseIdentifier', 'contentTrust', 'evidenceScope')}
             context['content'] += ('\nODS already resolved this public repository at an immutable revision. '
@@ -1451,8 +1479,9 @@ async def chat_extension_request_context(owner, chat_id, request_id, command, *,
                 + json.dumps(facts, ensure_ascii=True) + '. This is not runtime verification. '
                 'If existingExtensionIds is nonempty, inspect that integration instead of proposing a duplicate. '
                 'To inspect build files, use the actual pixel_ods_web_extract tool with url pointing to an observed file at this commit. '
-                'When installation is requested, discover pixel_ods_extension_proposal by its exact name, '
-                'read its schema and submit the researched recipe. A pip command or tutorial in the answer '
+                + ('The bound proposal above remains authoritative; this lookup does not replace it. '
+                   if revision else 'When installation is requested, use the appropriate proposal tool schema to submit the researched recipe. ')
+                + 'A pip command or tutorial in the answer '
                 'does not perform the requested installation. If the repository is only a library, explain '
                 'its actual entrypoint and integration needs; do not invent a web server or idle container.')
             try:
