@@ -2258,7 +2258,13 @@ def install_extension(service_id: str, api_key: str = Depends(verify_api_key)):
     # Some extensions (continue, sillytavern) ship a config/<id>/ directory
     # that the compose.yaml bind-mounts relative to the compose project root
     # (INSTALL_DIR), not relative to the extension directory.
-    _sync_extension_config(service_id)
+    if not _sync_extension_config(service_id):
+        # Starting without the bind-mounted files can make Docker create
+        # directories where files belong. Preserve the staged definition and
+        # report the failed prerequisite before requesting any container work.
+        message = "Extension configuration could not be synchronized to the host. Startup was not requested."
+        _write_error_progress(service_id, message)
+        raise HTTPException(status_code=502, detail=message)
 
     # Write initial progress file so status shows "installing" immediately
     # (before host agent starts processing â€” closes the race window)

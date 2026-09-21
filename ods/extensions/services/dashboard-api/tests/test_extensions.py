@@ -516,12 +516,29 @@ def _patch_mutation_config(monkeypatch, tmp_path, lib_dir=None, user_dir=None):
     # Mutation tests should model a reachable host agent unless a test is
     # specifically exercising the stop-failure path.
     monkeypatch.setattr("routers.extensions._call_agent", lambda action, sid: True)
+    monkeypatch.setattr("routers.extensions._call_agent_sync_config",
+                        lambda sid, *, preserve_existing=False: True)
 
 
 # --- Install endpoint ---
 
 
 class TestInstallExtension:
+
+    def test_failed_config_sync_does_not_request_container_install(self, test_client, monkeypatch, tmp_path):
+        from routers import extensions as ext_mod
+        lib_dir = _setup_library_ext(tmp_path, "my-ext")
+        _patch_mutation_config(monkeypatch, tmp_path, lib_dir=lib_dir)
+        monkeypatch.setattr(ext_mod, "_call_agent_sync_config",
+                            lambda sid, *, preserve_existing=False: False)
+        installs = []
+        monkeypatch.setattr(ext_mod, "_call_agent_install", lambda sid: installs.append(sid))
+        response = test_client.post("/api/extensions/my-ext/install", headers=test_client.auth_headers)
+        assert response.status_code == 502
+        assert "Startup was not requested" in response.json()["detail"]
+        assert installs == []
+        assert (tmp_path / "user" / "my-ext" / "compose.yaml").is_file()
+        assert ext_mod._read_progress("my-ext")["status"] == "error"
 
     def test_install_copies_and_enables(self, test_client, monkeypatch, tmp_path):
         """Install copies from library and keeps compose.yaml enabled."""
