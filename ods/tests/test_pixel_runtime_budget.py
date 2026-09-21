@@ -53,12 +53,14 @@ def test_shared_overlay_is_staged_idempotent_and_uses_selected_home(tmp_path, co
         str(openclaw_home / '.ods-exec-control') + ':/run/pixel-ods-control:ro']
     agent = value['agents']['list'][0]
     assert agent['experimental']['localModelLean'] is False
+    assert value['tools']['toolSearch']['enabled'] is True
+    assert value['tools']['toolSearch']['mode'] == 'tools'
     assert agent['contextLimits']['toolResultMaxChars'] == max(4000, min(16000, context // 4))
     assert {'pixel_ops_run', 'pixel_ods_workspace_preview', 'create_goal'}.issubset(value['tools']['alsoAllow'])
     assert 'pixel_ods_extension_proposal' in value['tools']['alsoAllow']
     assert 'pixel_ods_extension_proposal' in value['tools']['sandbox']['tools']['allow']
     assert 'pixel_ods_extension_proposal' not in agent['tools']['deny']
-    for tool in ('pixel_ods_python_library_proposal', 'pixel_ods_extension_request_status', 'pixel_ods_extension_request_prepare', 'pixel_ods_extension_request_advance'):
+    for tool in ('pixel_ods_skill', 'pixel_ods_python_library_proposal', 'pixel_ods_extension_request_status', 'pixel_ods_extension_request_prepare', 'pixel_ods_extension_request_advance'):
         assert tool in value['tools']['alsoAllow']
         assert tool in value['tools']['sandbox']['tools']['allow']
         assert tool not in agent['tools']['deny']

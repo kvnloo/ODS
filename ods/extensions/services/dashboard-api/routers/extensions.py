@@ -1704,7 +1704,8 @@ async def extension_github_request_proposal(request: Request, api_key: str = Dep
                 # draft. A binding conflict hides the information needed to
                 # correct a recipe and makes small models repeat it forever.
                 raise HTTPException(status_code=422, detail={
-                    'code': 'recipe-validation-failed', 'errors': validation['errors']})
+                    'code': 'recipe-validation-failed', 'errors': validation['errors'],
+                    'existingExtensionIds': validation.get('existingExtensionIds', [])})
             drafts = parent / '.extension-recipe-drafts'
             if drafts.is_symlink():
                 raise ValueError('Invalid draft storage')

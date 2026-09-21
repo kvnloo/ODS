@@ -255,7 +255,13 @@ export function createExtensionProposalTool(context, {submit = submitExtensionPr
               && typeof item.path === 'string' && /^[A-Za-z0-9_/$.-]{1,256}$/.test(item.path))) {
           return {isError: true, content: [{type: 'text', text: JSON.stringify({
             state: 'invalid-recipe', errors: result.errors, installationStarted: false,
-            next: 'Correct these schema or policy violations before resubmitting. Do not repeat the unchanged recipe.',
+            existingExtensionIds: Array.isArray(result.existingExtensionIds)
+              && result.existingExtensionIds.length <= 64
+              && result.existingExtensionIds.every(id => typeof id === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(id))
+              ? [...new Set(result.existingExtensionIds)] : [],
+            next: result.errors.some(item => item.code === 'repository-already-exists')
+              ? 'This repository already has a registered integration. Changing serviceId cannot resolve this conflict. The existing IDs can be inspected with pixel_ods_extensions; its catalog can locate them if IDs are unavailable. Registration alone does not establish installation or health. Respect the current request scope; do not create a duplicate or start installation for research-only work.'
+              : 'Correct these schema or policy violations before resubmitting. Do not repeat the unchanged recipe.',
           })}]};
         }
         if (result?.schemaVersion !== 1 || result.kind !== 'ods-extension-request-proposal'

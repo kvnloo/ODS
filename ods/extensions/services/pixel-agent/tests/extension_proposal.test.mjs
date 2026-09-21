@@ -200,6 +200,22 @@ test('surfaces only bounded value-free diagnostics for this exact request', asyn
   }
 });
 
+test('repository conflicts retain existing IDs without suggesting a renamed duplicate', async () => {
+  const diagnostic = {...receipt, state: 'invalid-recipe',
+    errors: [{code: 'repository-already-exists', path: 'repository'}],
+    existingExtensionIds: ['registered-click']};
+  const run = value => createExtensionProposalTool(context, {submit: async () => value}).execute('id', args);
+  const result = await run(diagnostic);
+  const evidence = JSON.parse(result.content[0].text);
+  assert.equal(result.isError, true);
+  assert.deepEqual(evidence.existingExtensionIds, ['registered-click']);
+  assert.equal(evidence.installationStarted, false);
+  assert.match(evidence.next, /Changing serviceId cannot resolve/);
+  assert.match(evidence.next, /Registration alone does not establish installation/);
+  const malformed = await run({...diagnostic, existingExtensionIds: ['../private']});
+  assert.doesNotMatch(malformed.content[0].text, /\.\.\/private/);
+});
+
 test('simple source proposals use the same scoped API and immutable recipe validation', async () => {
   let submitted;
   const tool = createExtensionProposalTool(context, {submit: async payload => { submitted = payload; return receipt; }});

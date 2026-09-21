@@ -140,9 +140,12 @@ updated_agent_context_limits = updated_agent.setdefault("contextLimits", {})
 # model size must not silently remove core agent features. Existing explicit
 # tool denials, sandbox policy, and ODS authority checks still apply.
 updated_agent_experimental["localModelLean"] = False
+# Let the model discover capabilities. Directory mode preselects native schemas
+# with English prompt-keyword scoring and injects the whole directory; both
+# distorted Portuguese requests and consumed the local model's working context.
 updated_tools["toolSearch"] = {
     "enabled": True,
-    "mode": "directory",
+    "mode": "tools",
     "searchDefaultLimit": 5,
     "maxSearchLimit": 10,
 }

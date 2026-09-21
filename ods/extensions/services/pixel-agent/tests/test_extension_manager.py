@@ -1170,6 +1170,16 @@ class RecipeValidationTests(unittest.TestCase):
             self.assertEqual(result['state'], 'invalid-recipe')
             self.assertEqual(result['errors'], [error])
             self.assertFalse(result['installationStarted'])
+            with mock.patch.object(manager, '_request_json', return_value=(422, {'detail': {
+                    'code': 'recipe-validation-failed', 'errors': [error],
+                    'existingExtensionIds': ['registered-click']}})):
+                result = manager._submit_request_proposal(pathlib.Path('/unused-env'), 3002, json.dumps(envelope).encode())
+                self.assertEqual(result['existingExtensionIds'], ['registered-click'])
+            for existing in ('registered-click', ['../private'], ['x'] * 65):
+                with mock.patch.object(manager, '_request_json', return_value=(422, {'detail': {
+                        'code': 'recipe-validation-failed', 'errors': [error], 'existingExtensionIds': existing}})):
+                    with self.assertRaises(manager.ManagerError):
+                        manager._submit_request_proposal(pathlib.Path('/unused-env'), 3002, json.dumps(envelope).encode())
             for errors in ([{**error, 'value': 'secret'}], [{**error, 'path': 'unexpected\\nvalue'}], [error] * 33):
                 with mock.patch.object(manager, '_request_json', return_value=(422, {'detail': {
                         'code': 'recipe-validation-failed', 'errors': errors}})):

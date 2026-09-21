@@ -1117,7 +1117,10 @@ def _submit_request_proposal(env_path, port, payload):
     if status == 422:
         detail = value.get('detail')
         errors = detail.get('errors') if isinstance(detail, dict) else None
+        existing = detail.get('existingExtensionIds', []) if isinstance(detail, dict) else None
         if (isinstance(detail, dict) and detail.get('code') == 'recipe-validation-failed'
+                and isinstance(existing, list) and len(existing) <= 64
+                and all(isinstance(item, str) and re.fullmatch(r'[a-z0-9][a-z0-9-]{0,63}', item) for item in existing)
                 and isinstance(errors, list) and 1 <= len(errors) <= 32
                 and all(isinstance(item, dict) and set(item) == {'code', 'path'}
                         and isinstance(item['code'], str) and re.fullmatch('[a-z-]{1,80}', item['code'])
@@ -1125,7 +1128,8 @@ def _submit_request_proposal(env_path, port, payload):
                         for item in errors)):
             return {'schemaVersion': 1, 'kind': 'ods-extension-request-proposal',
                     'chatId': envelope['chatId'], 'requestId': envelope['requestId'],
-                    'state': 'invalid-recipe', 'errors': errors, 'installationStarted': False}
+                    'state': 'invalid-recipe', 'errors': errors,
+                    'existingExtensionIds': sorted(set(existing)), 'installationStarted': False}
         raise ManagerError('invalid recipe diagnostics')
     digest = hashlib.sha256(json.dumps(candidate, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
     proposal = value.get('proposal', {})

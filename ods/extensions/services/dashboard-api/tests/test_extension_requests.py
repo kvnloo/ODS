@@ -211,6 +211,13 @@ def test_proposal_route_saves_only_for_active_matching_owner_request(monkeypatch
     assert failure.value.detail['code'] == 'recipe-validation-failed'
     assert any(row['code'] == 'manifest-schema' for row in failure.value.detail['errors'])
     assert 'sensitive-value' not in json.dumps(failure.value.detail)
+    monkeypatch.setattr(extensions, '_validated_github_recipe', AsyncMock(return_value={
+        'valid': False, 'errors': [{'code': 'repository-already-exists', 'path': 'repository'}],
+        'existingExtensionIds': ['existing-answer']}))
+    with pytest.raises(extensions.HTTPException) as conflict:
+        asyncio.run(extensions.extension_github_request_proposal(request(), api_key='owner'))
+    assert conflict.value.status_code == 422
+    assert conflict.value.detail['existingExtensionIds'] == ['existing-answer']
 
 
 def test_active_routing_is_owner_chat_and_expiry_scoped(tmp_path):

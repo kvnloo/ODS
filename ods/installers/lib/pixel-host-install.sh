@@ -1383,7 +1383,7 @@ normalized_pixel_config["perplexicaPort"] = research_port
 # describe, and call the same complete authorized catalog without an allowlist.
 normalized_tools["toolSearch"] = {
     "enabled": True,
-    "mode": "directory",
+    "mode": "tools",
     "searchDefaultLimit": 5,
     "maxSearchLimit": 10,
 }
