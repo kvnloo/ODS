@@ -44,7 +44,7 @@ test('transport uses only fixed manager socket and accepts fragmented bounded fr
     socket.emit('data', Buffer.from('true}\n'));
   };
   const pending = submitExtensionProposal({action: 'github-request-propose'}, {connect: options => {
-    assert.deepEqual(options, {path: '/run/ods-pixel-manager/extension-manager.sock'});
+    assert.deepEqual(options, {path: process.platform === 'darwin' ? '/private/var/lib/ods-pixel-manager/extension-manager.sock' : '/run/ods-pixel-manager/extension-manager.sock'});
     return socket;
   }});
   socket.emit('connect');
@@ -59,3 +59,17 @@ test('transport rejects oversized response rather than returning arbitrary manag
   socket.emit('connect');
   await assert.rejects(pending, /unavailable/);
 });
+
+for (const [platform, path] of [['darwin', '/private/var/lib/ods-pixel-manager/extension-manager.sock'], ['linux', '/run/ods-pixel-manager/extension-manager.sock']]) {
+  test(`proposal reaches the native manager on ${platform}`, async () => {
+    const socket = new EventEmitter();
+    socket.destroy = () => {};
+    socket.write = () => socket.emit('data', Buffer.from('{"ok":true}\n'));
+    const pending = submitExtensionProposal({}, {platform, connect: options => {
+      assert.deepEqual(options, {path});
+      return socket;
+    }});
+    socket.emit('connect');
+    assert.deepEqual(await pending, {ok: true});
+  });
+}

@@ -924,7 +924,7 @@ class RecipeValidationTests(unittest.TestCase):
         connection = mock.Mock()
         connection.recv.return_value = (json.dumps(value) + '\n').encode()
         with mock.patch.object(manager.socket, 'socket', return_value=connection), mock.patch.object(manager.sys, 'stdout'):
-            self.assertEqual(manager.repository_client(pathlib.Path('/run/ods-pixel-manager/extension-manager.sock'),
+            self.assertEqual(manager.repository_client(manager.SOCKET_PATH,
                 draft_id='d' * 64, prepare_draft=True), 0)
         self.assertEqual(json.loads(connection.sendall.call_args.args[0]),
                          {'schemaVersion': 1, 'action': 'github-draft-prepare', 'draftId': 'd' * 64})
@@ -942,7 +942,7 @@ class RecipeValidationTests(unittest.TestCase):
             with mock.patch.object(manager, 'repository_client', return_value=0) as client:
                 self.assertEqual(manager.main(['manager', 'repository-' + mode + '-parts',
                                               '/run/ods-pixel-manager/extension-manager.sock', *parts]), 0)
-            client.assert_called_once_with(pathlib.Path('/run/ods-pixel-manager/extension-manager.sock'),
+            client.assert_called_once_with(manager.SOCKET_PATH,
                                            recipe=recipe, save_draft=mode == 'draft-save')
 
     def test_invalid_recipe_parts_never_dispatch(self):
@@ -1061,7 +1061,7 @@ class RecipeValidationTests(unittest.TestCase):
         connection.recv.return_value = (json.dumps(value) + '\n').encode()
         with mock.patch.object(manager.socket, 'socket', return_value=connection), \
              mock.patch.object(manager.sys, 'stdout') as output:
-            result = manager.repository_client(pathlib.Path('/run/ods-pixel-manager/extension-manager.sock'), draft_id='d' * 64)
+            result = manager.repository_client(manager.SOCKET_PATH, draft_id='d' * 64)
         self.assertEqual(result, 0)
         self.assertEqual(json.loads(connection.sendall.call_args.args[0]),
                          {'schemaVersion': 1, 'action': 'github-draft-read', 'draftId': 'd' * 64})

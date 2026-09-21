@@ -3,15 +3,17 @@ import {createHash} from 'node:crypto';
 
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
 const PREFIX = 'agent:pixel:openai-user:ods-';
-const SOCKET = '/run/ods-pixel-manager/extension-manager.sock';
+const managerSocket = platform => platform === 'darwin'
+  ? '/private/var/lib/ods-pixel-manager/extension-manager.sock'
+  : '/run/ods-pixel-manager/extension-manager.sock';
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).sort().join() === [...keys].sort().join();
 
 // This channel can only bind a proposal to an existing owner request. It has
 // no lifecycle operation, arbitrary URL, shell command or credential parameter.
-export function submitExtensionProposal(payload, {connect = net.createConnection} = {}) {
+export function submitExtensionProposal(payload, {connect = net.createConnection, platform = process.platform} = {}) {
   return new Promise((resolve, reject) => {
-    const socket = connect({path: SOCKET});
+    const socket = connect({path: managerSocket(platform)});
     let buffer = Buffer.alloc(0), finished = false;
     const finish = (error, value) => {
       if (finished) return;

@@ -69,7 +69,9 @@ MAX_RECIPE_BYTES = 32768
 MAX_FRAME_BYTES = 65536
 MAX_RESPONSE_BYTES = 1024 * 1024
 MAX_OPS_STATUS_BYTES = 64 * 1024
-OPS_RESULTS_DIR = pathlib.Path("/var/lib/pixel-ops-broker/results")
+BROKER_USER = "_ods_pixel_ops" if sys.platform == "darwin" else "pixel-ops-broker"
+SOCKET_PATH = pathlib.Path("/private/var/lib/ods-pixel-manager/extension-manager.sock" if sys.platform == "darwin" else "/run/ods-pixel-manager/extension-manager.sock")
+OPS_RESULTS_DIR = pathlib.Path("/private/var/lib/pixel-ops-broker/results" if sys.platform == "darwin" else "/var/lib/pixel-ops-broker/results")
 TERMINAL_PROGRESS = frozenset({"started", "error", "idle"})
 SUCCESS_STATUS = {
     "install": frozenset({"enabled", "cli_installed"}),
@@ -1445,13 +1447,11 @@ def _serve_connection(
 
 def serve(socket_path: pathlib.Path, env_path: pathlib.Path, port: int, *, credential_source=None) -> int:
     if (
-        not socket_path.is_absolute()
-        or socket_path.parent != pathlib.Path("/run/ods-pixel-manager")
-        or socket_path.name != "extension-manager.sock"
+        socket_path != SOCKET_PATH
         or not 1 <= port <= 65535
     ):
         raise ManagerError("invalid lifecycle server configuration")
-    broker_uid = pwd.getpwnam("pixel-ops-broker").pw_uid
+    broker_uid = pwd.getpwnam(BROKER_USER).pw_uid
     parent = socket_path.parent
     info = parent.lstat()
     if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_mode & 0o007:
@@ -1486,7 +1486,7 @@ def serve(socket_path: pathlib.Path, env_path: pathlib.Path, port: int, *, crede
 
 def client(socket_path: pathlib.Path, action: str, extension_id: str) -> int:
     if (
-        socket_path != pathlib.Path("/run/ods-pixel-manager/extension-manager.sock")
+        socket_path != SOCKET_PATH
         or action not in ALLOWED_ACTIONS
         or SERVICE_ID.fullmatch(extension_id) is None
         or (action == "list") != (extension_id == "all")
@@ -1528,7 +1528,7 @@ def client(socket_path: pathlib.Path, action: str, extension_id: str) -> int:
 
 
 def repository_client(socket_path: pathlib.Path, repository=None, commit=None, path=None, recipe=None, save_draft=False, draft_id=None, prepare_draft=False) -> int:
-    if socket_path != pathlib.Path('/run/ods-pixel-manager/extension-manager.sock'):
+    if socket_path != SOCKET_PATH:
         raise ManagerError('invalid repository socket')
     if recipe is not None:
         recipe = _recipe_candidate(recipe)
@@ -1597,7 +1597,7 @@ def repository_client(socket_path: pathlib.Path, repository=None, commit=None, p
 
 def status_client(socket_path: pathlib.Path, job_id: str, plan_hash: str) -> int:
     if (
-        socket_path != pathlib.Path("/run/ods-pixel-manager/extension-manager.sock")
+        socket_path != SOCKET_PATH
         or JOB_ID.fullmatch(job_id) is None
         or HEX_KEY.fullmatch(plan_hash) is None
     ):
