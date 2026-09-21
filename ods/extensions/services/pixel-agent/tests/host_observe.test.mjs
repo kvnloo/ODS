@@ -22,6 +22,48 @@ async function publishResult(filename, value) {
   await rename(temporary, filename);
 }
 
+test('inventory pages retain full evidence without sending the entire catalog as nested JSON', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pixel-inventory-page-'));
+  const requestDir = join(root, 'requests'), resultDir = join(root, 'results');
+  await mkdir(requestDir); await mkdir(resultDir);
+  const extensions = Array.from({length:203}, (_, i) => ({id:`extension-${i}`, name:`Extension ${i}`, status:'not_installed'}));
+  try {
+    const tool = createExtensionReadTool({requestDir, resultDir, timeoutMs:2000, pollIntervalMs:5});
+    for (const [offset, limit] of [[0,10], [10,20], [200,10], [203,10]]) {
+      const pending = tool.execute('page', {action:'list', offset, limit});
+      let names = [];
+      for (let i=0; i<200 && !names.length; i++) {
+        names = (await readdir(requestDir)).filter(name => name.endsWith('.json'));
+        if (!names.length) await delay(5);
+      }
+      assert.equal(names.length, 1);
+      const request = JSON.parse(await readFile(join(requestDir, names[0]), 'utf8'));
+      assert.deepEqual(request.parameters, {}); // Pagination never changes broker authority/schema.
+      const inventory = {schemaVersion:1, kind:'ods-pixel-extension-inventory', outcome:'succeeded', extensions, summary:{total:203}};
+      const receipt = {schemaVersion:2, jobId:request.jobId, status:'succeeded', steps:[{
+        target:'ods-host', action:'ods.extensions.list', exitCode:0, stderr:'', stdout:JSON.stringify(inventory),
+        outputTruncated:{stdout:false,stderr:false},
+      }]};
+      await publishResult(join(resultDir, names[0]), receipt);
+      const result = await pending;
+      const page = JSON.parse(result.content[0].text);
+      assert.deepEqual(page.extensions, extensions.slice(offset, offset+limit));
+      assert.equal(page.page.nextOffset, offset+limit<203 ? offset+limit : null);
+      assert.equal(page.page.total, 203);
+      assert.equal(page.untrustedOutput, true);
+      assert.ok(result.content[0].text.length < 4000);
+      assert.deepEqual(result.details.steps, receipt.steps);
+      assert.equal(JSON.parse(result.details.steps[0].stdout).extensions.length, 203);
+      await rm(join(requestDir, names[0]));
+    }
+    for (const args of [{action:'list',offset:-1}, {action:'list',offset:1.1},
+      {action:'list',limit:21}, {action:'list',limit:0}, {action:'inspect',serviceId:'click',offset:0}]) {
+      assert.equal((await tool.execute('invalid', args)).isError, true);
+    }
+    assert.deepEqual(await readdir(requestDir), []);
+  } finally { await rm(root, {recursive:true,force:true}); }
+});
+
 test('completed broker delivery preserves a failed inspection as a tool error', async () => {
   const root = await mkdtemp(join(tmpdir(), 'pixel-extension-logical-error-'));
   const requestDir = join(root, 'requests');

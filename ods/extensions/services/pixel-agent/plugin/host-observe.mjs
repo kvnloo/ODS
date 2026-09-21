@@ -410,7 +410,7 @@ export function createHostObserveTool({
 const EXTENSION_READ_BOUNDARY =
   "Read-only ODS extension discovery through the external Operations Broker. This receipt grants no authority to install, configure, or change an extension.";
 
-function extensionReadResult(receipt, action, target, serviceId) {
+function extensionReadResult(receipt, action, target, serviceId, page = {}) {
   const result = toolResult(receipt);
   if (receipt.waitTimedOut || receipt.waitCancelled) return result;
   let failed = receipt.status !== 'succeeded';
@@ -423,6 +423,30 @@ function extensionReadResult(receipt, action, target, serviceId) {
       inspection?.schemaVersion !== 1 || inspection?.kind !== 'ods-pixel-extension-lifecycle' ||
       inspection?.action !== 'inspect' || inspection?.extensionId !== serviceId ||
       !['ready', 'inspected', 'blocked'].includes(inspection?.outcome);
+  }
+  if (!failed && action === 'list') {
+    const step = receipt.steps?.length === 1 ? receipt.steps[0] : undefined;
+    let inventory;
+    try { inventory = JSON.parse(step?.stdout); } catch { /* Keep unverified receipt intact. */ }
+    if (step?.target === target && step?.action === 'ods.extensions.list' &&
+        step?.exitCode === 0 && step?.stderr === '' && !step?.outputTruncated?.stdout &&
+        inventory?.schemaVersion === 1 && inventory?.kind === 'ods-pixel-extension-inventory' &&
+        inventory?.outcome === 'succeeded' && Array.isArray(inventory.extensions)) {
+      const offset = page.offset ?? 0;
+      const limit = page.limit ?? 10;
+      const extensions = inventory.extensions.slice(offset, offset + limit);
+      const nextOffset = offset + extensions.length < inventory.extensions.length
+        ? offset + extensions.length : null;
+      // Keep the complete broker receipt in details for verification and audit.
+      // Model content is a valid page, never a character-cut nested JSON string.
+      const content = {jobId: receipt.jobId, status: receipt.status,
+        observedAt: receipt.completedAt ?? receipt.updatedAt, target,
+        kind: inventory.kind, untrustedOutput: true, summary: inventory.summary,
+        extensions, page: {offset, limit, total: inventory.extensions.length, nextOffset},
+        boundary: EXTENSION_READ_BOUNDARY,
+        ...(nextOffset !== null ? {next: 'More entries are available with action=list and offset=nextOffset. Each call observes current inventory; entries may change between pages. Search or inspect can narrow a lookup.'} : {})};
+      return {...result, content: [{type: 'text', text: JSON.stringify(content)}]};
+    }
   }
   if (!failed) return result;
   // Broker completion only proves delivery of the lookup. Surface an inner
@@ -445,15 +469,22 @@ export function createExtensionReadTool({ requestDir = REQUEST_DIR, resultDir, t
         target: { type: "string", minLength: 2, maxLength: 64 },
         query: { type: "string", minLength: 1, maxLength: 80, pattern: "^[A-Za-z0-9 _/+:#.\\-]{1,80}$", description: "Short catalog keywords; defaults to all when omitted for search." },
         serviceId: { type: "string", pattern: "^[a-z0-9][a-z0-9._-]{0,63}$", description: "Exact catalog extension ID required for inspect." },
+        offset: {type: "integer", minimum: 0, description: "List only: first inventory entry, default 0. Use returned nextOffset for further pages."},
+        limit: {type: "integer", minimum: 1, maximum: 20, description: "List only: entries per page, default 10. Complete broker evidence remains in the operation receipt."},
       },
     },
     execute: async (_toolCallId, params, signal) => {
       if (signal?.aborted) return errorResult("Extension discovery was stopped before submission. No job was submitted.", EXTENSION_READ_BOUNDARY);
       const invalid = (message) => errorResult(message, EXTENSION_READ_BOUNDARY);
       if (!params || typeof params !== "object" || Array.isArray(params) ||
-          Object.keys(params).some((key) => !["action", "target", "query", "serviceId"].includes(key)) ||
+          Object.keys(params).some((key) => !["action", "target", "query", "serviceId", "offset", "limit"].includes(key)) ||
           !["search", "list", "inspect"].includes(params.action)) {
         return invalid("Choose one read-only extension action: search, list, or inspect.");
+      }
+      if ((params.offset !== undefined && (!Number.isSafeInteger(params.offset) || params.offset < 0)) ||
+          (params.limit !== undefined && (!Number.isSafeInteger(params.limit) || params.limit < 1 || params.limit > 20)) ||
+          (params.action !== 'list' && (params.offset !== undefined || params.limit !== undefined))) {
+        return invalid("Pagination is available for list only: offset is a nonnegative integer; limit is 1 through 20.");
       }
       const target = params.target === undefined ? "ods-host" : params.target;
       if (typeof target !== "string" || target.length < 2 || target.length > 64) {
@@ -490,7 +521,7 @@ export function createExtensionReadTool({ requestDir = REQUEST_DIR, resultDir, t
         });
         return extensionReadResult({ ...receipt, ...(receipt.waitTimedOut ? {
           next: "Read this existing job with pixel_ops_job_get or pixel_ops_job_wait; a wait timeout does not cancel the submitted read.",
-        } : {}) }, params.action, target, params.serviceId);
+        } : {}) }, params.action, target, params.serviceId, params);
       } catch {
         // A published request remains real work even if its result cannot be
         // read. Preserve its identity so the model can wait instead of resubmit.
