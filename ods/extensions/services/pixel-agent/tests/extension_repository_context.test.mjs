@@ -45,3 +45,18 @@ test('failed reads remain explicit and retryable; cached evidence expires',async
   await context(event);assert.equal(count,2);
   clock=60001;await context(event);assert.equal(count,3);
 });
+
+
+test('GitHub installation guidance survives failed evidence reads and goal wrappers', async () => {
+  for (const prefix of ['', '/goal ']) {
+    for (const result of [{isError: true}, {content: [{type: 'text', text: 'README'}]}]) {
+      const context = createExtensionRepositoryContext({tool: {execute: async () => result}});
+      const value = await context({prompt: `${prefix}/extensions https://github.com/a/b install`});
+      assert.match(value, /pixel_ods_extension_proposal/);
+      assert.match(value, /ods\.extensions\.github-inspect/);
+      assert.match(value, /do not also save, prepare or install/);
+      assert.match(value, /Honor research-only requests/);
+      assert.match(value, /sandbox does not register an ODS extension/);
+    }
+  }
+});

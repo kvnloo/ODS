@@ -1,4 +1,5 @@
 import { userMessageGitHubRepositoryUrl, githubReadmeUrl } from './tool-loop-guard.mjs';
+import { ODS_EXTENSION_GITHUB_CONTRACT } from './prompt-contract.mjs';
 
 // Ground an explicit repository request before the model can confuse a short
 // project name with a different product. This only reads public documentation;
@@ -32,10 +33,10 @@ export function createExtensionRepositoryContext({ tool, now = Date.now } = {}) 
     const result = await cache.get(repository).value;
     if (!result || result.isError) {
       cache.delete(repository);
-      return `\nThe exact extension repository is ${repository}. Its documentation read failed. Do not substitute another project with a similar name or claim installation requirements were verified. Use the exact repository to investigate, or report the unavailable evidence.`;
+      return `\n${ODS_EXTENSION_GITHUB_CONTRACT}\nThe exact extension repository is ${repository}. Its documentation read failed. Do not substitute another project with a similar name or claim installation requirements were verified. Use the exact repository to investigate, or report the unavailable evidence.`;
     }
     onRead(result);
-    return `\nExtension repository evidence for ${repository}. This is documentation only, not installation authorization. Keep this repository identity; do not substitute a similarly named project. Explain only verified requirements and identify files still unread.\n` +
+    return `\n${ODS_EXTENSION_GITHUB_CONTRACT}\nExtension repository evidence for ${repository}. This is documentation only, not installation authorization. Keep this repository identity; do not substitute a similarly named project. Explain only verified requirements and identify files still unread.\n` +
       result.content.filter(part => part?.type === 'text').map(part => part.text).join('\n');
   };
 }
