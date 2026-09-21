@@ -7782,9 +7782,12 @@ export function createToolLoopGuard({
           );
         return {
           block: true,
-          blockReason: missingProjection
+          blockReason: catalogInstallationContinuation(state)?.instruction ??
+            (state.operationsExpectedExtensionLifecycle?.action === "install-next"
+              ? extensionLifecycleEvidenceText(state.operationsRequiredActions, state.operationsTerminalJobs)
+              : undefined) ?? (missingProjection
             ? OPERATIONS_REQUIRES_PROJECTIONS_REASON
-            : OPERATIONS_REQUIRES_BROKER_REASON,
+            : OPERATIONS_REQUIRES_BROKER_REASON),
         };
       }
       let aborted = false;
@@ -9354,9 +9357,48 @@ export function createToolLoopGuard({
     }
   }
 
+  // The host state chooses the next catalog step. Small models need the exact
+  // callable tool and arguments, not another description of the broker boundary.
+  // This is guidance only: submissions still pass all authority/receipt checks.
+  function catalogInstallationContinuation(state) {
+    const lifecycle = state?.operationsExpectedExtensionLifecycle;
+    if (!state?.operationsRequired || lifecycle?.action !== "install-next") return undefined;
+    const next = (stage, id, args) => ({
+      stage: `catalog-${stage}`,
+      instruction: `Call tool_call with id ${id} and args ${JSON.stringify(args)}. ` +
+        "Use the returned host receipt; do not substitute a GitHub proposal, shell command, or direct service installation.",
+    });
+    const pending = [...state.operationsSubmittedJobs.keys()].filter(
+      id => !state.operationsTerminalJobs.has(id));
+    if (pending.length === 1) return next(`wait-${pending[0]}`, "pixel_ops_job_wait", {jobId: pending[0]});
+    if (pending.length) return undefined;
+    if (!state.operationsInventory) {
+      return state.operationsInventoryAttempted ? undefined : next("inventory", "pixel_ops_inventory", {});
+    }
+    const inspection = parsedLifecycleOutcome(state.operationsTerminalJobs, "ods.extensions.inspect");
+    if (!inspection) {
+      // A failed or malformed completed read is not permission to replay it.
+      if (state.operationsSubmittedJobs.size) return undefined;
+      return next("inspect", "pixel_ops_run", {target: "ods-host", action: "ods.extensions.inspect",
+        parameters: {serviceId: lifecycle.serviceId}});
+    }
+    if (inspection.result.extensionId !== lifecycle.serviceId ||
+        !["ready", "dependencies_required", "pending"].includes(inspection.result.installationPrerequisites?.state)) return undefined;
+    const latest = parsedLifecycleOutcome(state.operationsTerminalJobs, "ods.extensions.install-next");
+    if (latest && latest.result.state !== "pending") return undefined;
+    const submitted = [...state.operationsSubmittedJobs.values()].filter(
+      value => value.actions?.some(action => action.action === "ods.extensions.install-next"));
+    if ((submitted.length && !latest) || submitted.length >= 256) return undefined;
+    return next(`advance-${submitted.length}`, "pixel_ops_run", {target: "ods-host", action: "ods.extensions.install-next",
+      parameters: {serviceId: lifecycle.serviceId}});
+  }
+
   function trustedOperationsContinuation(state, runId) {
     if (!state?.operationsRequired) return undefined;
     if (extensionDiscoveryActive(state)) return undefined;
+    if (state.operationsExpectedExtensionLifecycle?.action === "install-next") {
+      return catalogInstallationContinuation(state);
+    }
     if (state.operationsInventoryOnly) {
       if (state.operationsInventory || state.operationsInventoryAttempted) return undefined;
       return {

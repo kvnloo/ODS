@@ -15152,3 +15152,19 @@ for (const initial of ["disabled", "stopped", "not_installed", "enabled"]) {
     assert.equal(call(guard, "pixel_ops_run", {event: {params: gate.params}})?.block, true);
   });
 }
+
+
+test("catalog wrong-tool correction gives an executable next step without changing the selected extension", () => {
+  for (const extension of ["invoiceshelf", "distribution", "crewai"]) {
+    const guard = createToolLoopGuard();
+    guard.observeRun({agentId: "pixel", runId: "run-1", sessionId: "session-1"}, "pixel",
+      {prompt: `/extensions @${extension} instale pra mim`});
+    const rejected = call(guard, "pixel_ods_extension_proposal", {event: {params: {}}});
+    assert.equal(rejected.block, true);
+    assert.match(rejected.blockReason, /id pixel_ops_inventory and args \{\}/);
+    assert.doesNotMatch(rejected.blockReason, /id pixel_ods_host_observe/);
+    assert.equal(call(guard, "pixel_ops_run", {event: {params: {
+      target: "ods-host", action: "ods.extensions.install-next", parameters: {serviceId: extension},
+    }}})?.block, true, "guidance never bypasses required inspection");
+  }
+});
