@@ -75,5 +75,9 @@ export default function useExtensionInstallation(chatId) {
       if (current.current === run) current.current = null
     })
   }, [])
-  return { state, start, stop }
+  const resume = useCallback(() => {
+    if (state?.chatId !== chatId || state.state !== 'reconciliation_required') return
+    start(state.command, undefined, { chatId: state.chatId, requestId: state.requestId })
+  }, [chatId, state, start])
+  return { state, start, stop, resume }
 }

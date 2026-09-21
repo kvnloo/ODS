@@ -577,7 +577,7 @@ export default function Pixel({ systemStatus = null }) {
   const stopRequestRef = useRef(null)
   const restoredActivityRef = useRef(restoredActivity)
   const chatIdRef = useRef(initialChat?.chatId || makeChatId())
-  const { state: extensionInstallation, start: startExtensionInstallation, stop: stopExtensionInstallation } = useExtensionInstallation(chatIdRef.current)
+  const { state: extensionInstallation, start: startExtensionInstallation, stop: stopExtensionInstallation, resume: resumeExtensionInstallation } = useExtensionInstallation(chatIdRef.current)
   const { state: githubExtensionInstallation, start: startGithubExtensionRequest,
     stop: stopGithubExtensionInstallation, resume: resumeGithubExtensionInstallation } = useGithubExtensionRequest(chatIdRef.current)
   useEffect(() => { setWorkspaceRequest(null); setWorkspaceExpanded(false) }, [chatIdRef.current])
@@ -1564,7 +1564,7 @@ export default function Pixel({ systemStatus = null }) {
                 <PortalExtensionProgress key={`extension-progress/${chatIdRef.current}/${index}`}
                   command={githubExtensionInstallation?.command || messages[index - 1].content} active={message.status === 'streaming'}
                   installation={githubExtensionInstallation || extensionInstallation}
-                  onRecheckInstallation={githubExtensionInstallation ? resumeGithubExtensionInstallation : undefined}
+                  onRecheckInstallation={githubExtensionInstallation ? resumeGithubExtensionInstallation : resumeExtensionInstallation}
                   onStopInstallation={githubExtensionInstallation ? stopGithubExtensionInstallation : stopExtensionInstallation}
                   projectPath={conversationProject({messages, preview})?.path}/>}
               {message.role === 'assistant' && index === messages.length - 1 && integrationRecovery &&

@@ -68,3 +68,34 @@ test('rendering history never installs; only explicit command starts do, and cha
   expect(fetcher).toHaveBeenCalledTimes(1)
   expect(view.result.current.state).toBeNull()
 })
+
+
+test('explicit recovery reconciles a lost acknowledgement with the same catalog coordinator', async () => {
+  const fetcher = vi.fn().mockRejectedValueOnce(new Error('connection lost'))
+    .mockResolvedValueOnce(response(receipt('succeeded')))
+  vi.stubGlobal('fetch', fetcher)
+  const view = renderHook(() => useExtensionInstallation('chat'))
+  await act(async () => view.result.current.start('/extensions @demo install', undefined,
+    {chatId: 'chat', requestId: 'turn'}))
+  expect(view.result.current.state.state).toBe('reconciliation_required')
+  expect(fetcher).toHaveBeenCalledTimes(1)
+  await act(async () => view.result.current.resume())
+  expect(fetcher).toHaveBeenCalledTimes(2)
+  expect(fetcher.mock.calls.every(([url]) => url === '/api/extensions/demo/install-next')).toBe(true)
+  expect(view.result.current.state).toMatchObject({state: 'succeeded', chatId: 'chat', requestId: 'turn'})
+  await act(async () => view.result.current.resume())
+  expect(fetcher).toHaveBeenCalledTimes(2)
+  view.unmount()
+})
+
+test('recovery cannot resume installation after switching chats', async () => {
+  const fetcher = vi.fn().mockRejectedValue(new Error('connection lost'))
+  vi.stubGlobal('fetch', fetcher)
+  const view = renderHook(({chat}) => useExtensionInstallation(chat), {initialProps: {chat: 'chat'}})
+  await act(async () => view.result.current.start('/extensions @demo install', undefined,
+    {chatId: 'chat', requestId: 'turn'}))
+  view.rerender({chat: 'other'})
+  await act(async () => view.result.current.resume())
+  expect(fetcher).toHaveBeenCalledTimes(1)
+  view.unmount()
+})
