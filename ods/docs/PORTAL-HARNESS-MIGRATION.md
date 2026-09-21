@@ -395,3 +395,14 @@ WSL plugin with `git apply --check`, preserving pre-existing runtime differences
 and idle/active=0 after startup; reverse patch check confirms exact deployment.
 A fresh 4B/32768 chat is testing repair of the existing CSV project. Outcome is not
 yet qualified by this deployment or the unit suites.
+
+Live outcome for this deployment: session `17b5bb79-2bcc-4bfb-86a6-c38648f01724`
+terminated with a failure. The 4B read the existing file, wrote a program still
+skipping the first row despite the no-header requirement, ran commands, then wrote
+incorrect one-line fixtures containing `header`. Tools executed inside the sandbox;
+no adapter supplied the shell plan. It repeated the same fixture write twice and
+then attempted a materially different edit. The repeated-write guard had already
+set `codingExhausted`, so it rejected that correction. This is both a model semantic
+failure and a concrete recovery-policy issue to fix next: repeated no-op attempts
+should remain bounded without prematurely prohibiting a different corrective action.
+No successful CSV repair or general 4B qualification is claimed.
