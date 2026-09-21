@@ -1498,7 +1498,8 @@ async def extension_github_request(request: Request, api_key: str = Depends(veri
 @router.post("/api/extensions/github/requests/proposal")
 async def extension_github_request_proposal(request: Request, api_key: str = Depends(verify_api_key)):
     from extension_requests import read_request, bind_proposal
-    from extension_recipe_drafts import save_draft
+    from extension_recipe_drafts import save_draft, read_draft
+    from extension_recipe_package import recipe_digest
     from extension_github import repository_identity
     payload = await _github_recipe_payload(request)
     if not isinstance(payload, dict) or set(payload) != {'chatId', 'requestId', 'candidate'}:
@@ -1514,6 +1515,16 @@ async def extension_github_request_proposal(request: Request, api_key: str = Dep
             if (current['state'] != 'pending' or not isinstance(candidate, dict)
                     or current['repository'] != 'https://github.com/' + repository_identity(candidate.get('repository')).lower()):
                 raise ValueError('Inactive or mismatched request')
+            bound = current.get('proposal')
+            if bound and bound['recipeDigest'] == recipe_digest(candidate):
+                # A lost response can be retried after the coordinator has
+                # published this extension. Revalidating it as a NEW recipe
+                # then rejects its own catalog ID. Recover the immutable,
+                # owner-bound receipt instead; this performs no installation.
+                saved = read_draft(parent / '.extension-recipe-drafts', api_key, bound['draftId'])
+                if recipe_digest(saved) != bound['recipeDigest']:
+                    raise ValueError('Bound proposal changed')
+                return current
             validation = asyncio.run_coroutine_threadsafe(_validated_github_recipe(candidate, api_key), loop).result()
             if validation.get('valid') is not True:
                 # Return the value-free validator diagnostics before saving a

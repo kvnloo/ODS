@@ -185,6 +185,23 @@ def test_proposal_route_saves_only_for_active_matching_owner_request(monkeypatch
     assert response.headers['cache-control'] == 'no-store'
     assert not (tmp_path / 'library').exists() and not (tmp_path / 'user').exists()
 
+    # The coordinator may already have published the extension when a lost
+    # proposal response is retried. Recover the same receipt without treating
+    # its catalog ID as a conflicting new install or repeating remote work.
+    with monkeypatch.context() as retry_patch:
+        validation = AsyncMock(side_effect=AssertionError('Retry must not validate a new installation'))
+        retry_patch.setattr(extensions, '_validated_github_recipe', validation)
+        retry = asyncio.run(extensions.extension_github_request_proposal(request(), api_key='owner'))
+        assert json.loads(retry.body) == result
+        validation.assert_not_awaited()
+        draft_path = tmp_path / '.extension-recipe-drafts' / (result['proposal']['draftId'] + '.json')
+        saved = draft_path.read_text(encoding='utf-8')
+        draft_path.write_text('{}', encoding='utf-8')
+        with pytest.raises(extensions.HTTPException) as corrupted:
+            asyncio.run(extensions.extension_github_request_proposal(request(), api_key='owner'))
+        assert corrupted.value.status_code == 409
+        draft_path.write_text(saved, encoding='utf-8')
+
     # An invalid recipe must yield actionable schema paths, not a misleading
     # ownership conflict or an echo of untrusted rejected values.
     proposal['manifest'] = {'private': 'sensitive-value'}
