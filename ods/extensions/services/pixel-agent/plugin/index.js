@@ -1,4 +1,5 @@
 import {createActivityTool, ACTIVITY_CONTRACT} from './activity-display.mjs';
+import {compactToolResultEnvelope} from './tool-result-envelope.mjs';
 import {createGoalProgress, createGoalProgressTool, GOAL_CONTRACT} from './goal-progress.mjs';
 // Pixel ODS integration plugin entry.
 //
@@ -392,9 +393,13 @@ export default definePluginEntry({
         return true;
       },
     });
-    api.on("tool_result_persist", (event, context) =>
-      toolLoopGuard.toolResultPersist(event, context, AGENT_ID)
-    );
+    api.on("tool_result_persist", (event, context) => {
+      const decision = toolLoopGuard.toolResultPersist(event, context, AGENT_ID);
+      if (context?.agentId !== AGENT_ID) return decision;
+      const original = decision?.message ?? event?.message;
+      const message = compactToolResultEnvelope(original);
+      return message !== original ? {...decision, message} : decision;
+    });
     api.on("before_agent_finalize", (event, context) => {
       const guardDecision = toolLoopGuard.beforeAgentFinalize(event, context, AGENT_ID);
       const verification = toolLoopGuard.deliveryVerificationForRun(context?.runId ?? event?.runId);

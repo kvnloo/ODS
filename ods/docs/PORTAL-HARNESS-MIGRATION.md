@@ -186,3 +186,23 @@ are useful but do not prove a local installation on every OS/GPU combination.
   is accepted, not installed. Next work must address isolated validation/repair,
   context recovery, truthful completion evidence and simpler session-bound
   tool identity instead of treating this partial success as completion.
+
+- The failing 4B run's gateway log confirms two actual overflow compactions
+  with retry. Its final error was an incomplete `toolUse` turn after side
+  effects, not absence of compaction. Do not remove replay protection to hide
+  that distinction. Repeated tool-call envelopes also copied discovery
+  descriptions into every execution result. A new persist projection keeps
+  identity and the entire result/error/evidence while removing only repeated
+  discovery metadata. On the saved trace this removed 18,871 characters from
+  139,114 characters of tool-result content (23 receipts). Original structured
+  details remain available to auditing. Fourteen focused Node checks passed.
+- Deployed the projection and ran another real 4B/32768 Portal probe,
+  `harness-4b-98c315d567bf`. It produced an accepted Click proposal with
+  `pythonImports: ["click"]`, then read its saved status and delivered a final
+  response. Draft `ecdcfe6f1d2d016ed3d4f6da4c2cc614468eb32da523a799efc6981f1dc326c0`.
+  A follow-up "Sim, pode instalar no ODS e verificar se funciona." retained
+  request `prepare-1`, prepared that same recipe and observed `not_installed`.
+  It then stopped. This proves proposal/preparation continuity in this probe,
+  not successful installation or a general context-overflow fix. A direct
+  session-bound managed advance tool is still missing and is the next concrete
+  integration gap. The 4B inference model/context were unchanged.
