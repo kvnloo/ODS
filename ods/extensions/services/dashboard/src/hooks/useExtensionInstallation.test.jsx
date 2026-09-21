@@ -23,7 +23,7 @@ test('advances server-owned dependency steps sequentially until verified readine
   }
 })
 
-test.each(['configuration_required', 'blocked', 'reconciliation_required'])('does not advance past %s', async state => {
+test.each(['configuration_required', 'failed', 'blocked', 'reconciliation_required'])('does not advance past %s', async state => {
   const fetcher = vi.fn().mockResolvedValue(response(receipt(state)))
   await advanceCatalogInstallation('demo', new AbortController().signal, vi.fn(), fetcher)
   expect(fetcher).toHaveBeenCalledTimes(1)

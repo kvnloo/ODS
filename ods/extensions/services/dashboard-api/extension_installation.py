@@ -6,6 +6,8 @@ this coordinator. One request advances at most one service.
 """
 import json
 import os
+import re
+import secrets
 import tempfile
 from pathlib import Path
 
@@ -27,7 +29,9 @@ class InstallationJournal:
                 raise ValueError('Invalid installation journal')
             for key, record in value['records'].items():
                 if (not ID.fullmatch(key) or not isinstance(record, dict)
-                        or set(record) != {'action', 'state'}
+                        or set(record) not in ({'action', 'state'}, {'action', 'state', 'operationId'})
+                        or ('operationId' in record and (not isinstance(record['operationId'], str)
+                            or not re.fullmatch(r'[a-f0-9]{32}', record['operationId'])))
                         or record['action'] not in ('install', 'enable')
                         or record['state'] not in ('dispatching', 'accepted', 'uncertain')):
                     raise ValueError('Invalid installation journal record')
@@ -48,17 +52,42 @@ class InstallationJournal:
                 os.unlink(temporary)
 
 
-def advance_installation(read_plan, journal, operation_lock, dispatch):
+def advance_installation(read_plan, journal, operation_lock, dispatch, *, observe=None):
     """Recheck after acquiring the lifecycle lock; retain ambiguous effects."""
     def choose(plan):
         # A healthy observation reconciles a prior request. Never equate the
         # install endpoint's HTTP acceptance with application readiness.
         reconciled = [s['extensionId'] for s in plan['steps']
-                      if s['action'] == 'none' and s['extensionId'] in journal.records]
+                      if s['action'] == 'none' and s['extensionId'] in journal.records
+                      and not journal.records[s['extensionId']].get('operationId')]
         for key in reconciled:
             del journal.records[key]
         if reconciled:
             journal.save()
+        # Query the exact host attempt before interpreting a stale catalog.
+        # Missing receipts and transport errors never authorize another POST.
+        for step in plan['steps']:
+            record = journal.records.get(step['extensionId'], {})
+            if record.get('operationId') and observe is not None:
+                try:
+                    receipt = observe(step['extensionId'], record['operationId'])
+                except Exception:
+                    receipt = None
+                if (not isinstance(receipt, dict)
+                        or receipt.get('service_id') != step['extensionId']
+                        or receipt.get('operation_id') != record['operationId']):
+                    return 'reconciliation_required', step
+                state = receipt.get('state')
+                if state == 'succeeded' and step['action'] == 'none':
+                    del journal.records[step['extensionId']]
+                    journal.save()
+                    continue
+                if state in {'accepted', 'running'}:
+                    return 'pending', step
+                if state == 'failed':
+                    return 'failed', step
+                # A successful operation still needs catalog/runtime evidence.
+                return 'reconciliation_required', step
         if plan['blocked']:
             return 'blocked', None
         if plan['requiresConfiguration']:
@@ -78,6 +107,7 @@ def advance_installation(read_plan, journal, operation_lock, dispatch):
     def result(state, plan, step=None, dispatched=False):
         return {'schemaVersion': 1, 'extensionId': plan['extensionId'],
                 'state': state, 'activeExtensionId': step['extensionId'] if step else None,
+                'operationId': journal.records.get(step['extensionId'], {}).get('operationId') if step else None,
                 'dispatched': dispatched, 'plan': plan}
 
     plan = read_plan()
@@ -95,9 +125,14 @@ def advance_installation(read_plan, journal, operation_lock, dispatch):
         if step['extensionId'] != selected:
             return result('pending', plan, step)
         journal.records[selected] = {'action': step['action'], 'state': 'dispatching'}
+        if observe is not None and step['action'] == 'install':
+            journal.records[selected]['operationId'] = secrets.token_hex(16)
         journal.save()  # Must succeed before causing an external effect.
         try:
-            dispatch(selected, step['action'])
+            if 'operationId' in journal.records[selected]:
+                dispatch(selected, step['action'], operation_id=journal.records[selected]['operationId'])
+            else:
+                dispatch(selected, step['action'])
         except Exception:
             # Do not expose host errors, configuration values, or raw logs.
             journal.records[selected]['state'] = 'uncertain'

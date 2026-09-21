@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { extensionSetupTarget } from '../components/PortalExtensionSetup'
 
-const terminal = new Set(['succeeded', 'blocked', 'configuration_required', 'reconciliation_required'])
+const terminal = new Set(['succeeded', 'failed', 'blocked', 'configuration_required', 'reconciliation_required'])
 
 export async function advanceCatalogInstallation(target, signal, report, fetcher = fetch) {
   if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(target)) throw new Error('Invalid extension')

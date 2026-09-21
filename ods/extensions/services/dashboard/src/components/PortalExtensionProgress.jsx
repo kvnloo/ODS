@@ -85,6 +85,7 @@ export default function PortalExtensionProgress({command, active = false, projec
       </li>)}
     </ul>}
     {association && <p>{association}</p>}
+    {installState === 'failed' && <p role="status">The host reported that this installation attempt failed. Inspect and correct the cause before starting another attempt.</p>}
     {installState === 'reconciliation_required' && <p role="status">Installation needs inspection before continuing. An accepted operation may still be running.</p>}
     {installState === 'reconciliation_required' && onRecheckInstallation && <button type="button" onClick={onRecheckInstallation}>Recheck installation</button>}
     {installState === 'blocked' && <p role="status">Installation cannot continue with the current host or extension state.</p>}

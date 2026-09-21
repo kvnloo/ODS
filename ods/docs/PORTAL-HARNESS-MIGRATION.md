@@ -139,3 +139,16 @@ are useful but do not prove a local installation on every OS/GPU combination.
   six focused checks then passed. The dashboard coordinator and model tools
   still need to persist/query these IDs and expose an explicit reconciled
   retry. This change alone does not complete managed repair or the Laya case.
+
+- The dashboard installation coordinator now persists the host operation ID
+  before dispatch, forwards it through the existing installer and queries the
+  authenticated host receipt on subsequent advances. Acceptance must match
+  both service and attempt. A missing/mismatched receipt remains unresolved;
+  a confirmed failed attempt is reported as failed without redispatch. A
+  previously healthy container cannot erase a newly running attempt: successful
+  host completion and a ready runtime observation are both required. Legacy
+  journal records remain conservative and are not assigned invented IDs.
+  The UI handles confirmed failure as terminal. Twenty-six focused API tests
+  and twenty UI tests passed. The broader extensions suite is still running.
+  This coordinator/host protocol has not yet been deployed together locally.
+  Explicit reconciled retry and model-facing lifecycle tools remain pending.

@@ -154,12 +154,15 @@ def test_api_uses_existing_installer_on_worker_and_health_plan_on_api_loop(tmp_p
     monkeypatch.setattr(extensions, '_extension_operation_lock', lock)
     calls = []
 
-    def install(key, api_key):
+    def install(key, api_key, operation_id):
         assert held == [key]
         assert api_key == 'test'
         calls.append(key)
+        assert len(operation_id) == 32
+        return {'restart_required': False}
 
-    monkeypatch.setattr(extensions, 'install_extension', Mock(__wrapped__=install))
+    monkeypatch.setattr(extensions, '_install_extension', install)
+    monkeypatch.setattr(extensions, 'request_agent_json', Mock(return_value={}))
 
     async def run():
         api_loop = asyncio.get_running_loop()
@@ -188,3 +191,62 @@ def test_enable_uses_existing_endpoint_without_implicit_dependency_mutation(tmp_
     monkeypatch.setattr(extensions, 'extension_install_plan', read)
     asyncio.run(extensions.extension_install_next('app', api_key='test'))
     enable.assert_called_once_with('app', auto_enable_deps=False, api_key='test')
+
+@pytest.mark.parametrize('host_state,expected', [('accepted','pending'), ('running','pending'),
+    ('failed','failed'), ('uncertain','reconciliation_required'), ('succeeded','reconciliation_required')])
+def test_managed_attempt_is_observed_after_restart_without_replay(tmp_path, host_state, expected):
+    path = tmp_path / 'journal.json'
+    read = lambda: make_plan({'app': 'not_installed', 'db': 'enabled'})
+    dispatch = Mock()
+    observe = Mock()
+    first = advance_installation(read, InstallationJournal(path), lambda key: contextlib.nullcontext(), dispatch, observe=observe)
+    operation_id = first['operationId']
+    assert len(operation_id) == 32
+    dispatch.assert_called_once_with('app', 'install', operation_id=operation_id)
+    observe.return_value = {'service_id':'app', 'operation_id':operation_id, 'state':host_state}
+    result = advance_installation(read, InstallationJournal(path), lambda key: contextlib.nullcontext(), dispatch, observe=observe)
+    assert result['state'] == expected
+    assert result['dispatched'] is False
+    assert dispatch.call_count == 1
+    observe.assert_called_once_with('app', operation_id)
+
+
+def test_old_healthy_container_does_not_erase_running_host_attempt(tmp_path):
+    path = tmp_path / 'journal.json'
+    states = {'app':'not_installed', 'db':'enabled'}
+    read = lambda: make_plan(states)
+    dispatch = Mock()
+    observe = Mock()
+    first = advance_installation(read, InstallationJournal(path), lambda key: contextlib.nullcontext(), dispatch, observe=observe)
+    states['app'] = 'enabled'
+    receipt = {'service_id':'app','operation_id':first['operationId'],'state':'running'}
+    observe.return_value = receipt
+    assert advance_installation(read, InstallationJournal(path), lambda key: contextlib.nullcontext(), dispatch, observe=observe)['state'] == 'pending'
+    assert InstallationJournal(path).records
+    receipt['state'] = 'succeeded'
+    assert advance_installation(read, InstallationJournal(path), lambda key: contextlib.nullcontext(), dispatch, observe=observe)['state'] == 'succeeded'
+    assert not InstallationJournal(path).records
+
+
+def test_other_attempt_receipt_cannot_reconcile_installation(tmp_path):
+    path = tmp_path / 'journal.json'
+    read = lambda: make_plan({'app':'not_installed','db':'enabled'})
+    observe = Mock(return_value={'service_id':'app','operation_id':'f'*32,'state':'failed'})
+    dispatch = Mock()
+    advance_installation(read, InstallationJournal(path), lambda key: contextlib.nullcontext(), dispatch, observe=observe)
+    result = advance_installation(read, InstallationJournal(path), lambda key: contextlib.nullcontext(), dispatch, observe=observe)
+    assert result['state'] == 'reconciliation_required'
+    assert dispatch.call_count == 1
+
+@pytest.mark.parametrize('reply,accepted', [
+    ({'status':'accepted','service_id':'app','operation_id':'a'*32}, True),
+    ({'status':'accepted','service_id':'other','operation_id':'a'*32}, False),
+    ({'status':'accepted'}, False), ({'operation':None}, False),
+    ({'operation':{'service_id':'app','operation_id':'a'*32,'state':'failed'}},False),
+    ({'operation':{'service_id':'app','operation_id':'a'*32,'state':'running'}},True),
+])
+def test_host_acceptance_must_match_operation_and_service(monkeypatch, reply, accepted):
+    request = Mock(return_value=reply)
+    monkeypatch.setattr(extensions, 'request_agent_json', request)
+    assert extensions._call_agent_install('app', operation_id='a'*32) is accepted
+    assert request.call_args.kwargs['payload']['operation_id'] == 'a'*32

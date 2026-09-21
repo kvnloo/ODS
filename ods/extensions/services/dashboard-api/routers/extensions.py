@@ -898,15 +898,23 @@ def _call_agent_hook(service_id: str, hook_name: str) -> bool:
         return False
 
 
-def _call_agent_install(service_id: str) -> bool:
+def _call_agent_install(service_id: str, operation_id: str | None = None) -> bool:
     """Call host agent combined install endpoint."""
     try:
-        request_agent_json(
+        response = request_agent_json(
             "POST",
             "/v1/extension/install",
-            payload={"service_id": service_id, "run_setup_hook": True},
+            payload={"service_id": service_id, "run_setup_hook": True,
+                     **({'operation_id': operation_id} if operation_id else {})},
             timeout=_AGENT_TIMEOUT,
         )
+        if operation_id:
+            receipt = response.get('operation', {}) if isinstance(response, dict) else {}
+            return bool(isinstance(response, dict) and (
+                (response.get('operation_id') == operation_id and response.get('service_id') == service_id
+                    and response.get('status') == 'accepted')
+                or (isinstance(receipt, dict) and receipt.get('operation_id') == operation_id and receipt.get('service_id') == service_id
+                    and receipt.get('state') in {'accepted', 'running', 'succeeded'})))
         return True
     except AgentHTTPError as exc:
         logger.warning(
@@ -1372,17 +1380,25 @@ def _advance_extension_installation(service_id: str, api_key: str, loop):
                 future.cancel()
                 raise
 
-        def dispatch(target, action):
+        def dispatch(target, action, *, operation_id=None):
             # advance_installation already holds the exact same lifecycle
             # lock as the public endpoints. Do not recursively acquire it.
             if action == "install":
-                install_extension.__wrapped__(target, api_key=api_key)
+                result = _install_extension(target, api_key=api_key, operation_id=operation_id)
+                if result.get('restart_required'):
+                    raise RuntimeError('Host installation acceptance was not confirmed')
             elif action == "enable":
                 enable_extension.__wrapped__(target, auto_enable_deps=False, api_key=api_key)
             else:
                 raise ValueError("Invalid installation action")
 
-        return advance_installation(read_plan, journal, _extension_operation_lock, dispatch)
+        def observe(target, operation_id):
+            response = request_agent_json('GET',
+                f'/v1/extension/operation?service_id={target}&operation_id={operation_id}',
+                timeout=_AGENT_TIMEOUT)
+            return response.get('operation') if isinstance(response, dict) else None
+
+        return advance_installation(read_plan, journal, _extension_operation_lock, dispatch, observe=observe)
 
 
 @router.post("/api/extensions/{service_id}/install-next")
@@ -2345,8 +2361,14 @@ def _rewrite_build_context(compose_path: Path, final_dir: Path) -> None:
 @router.post("/api/extensions/{service_id}/install")
 @_serialize_extension_operation
 def install_extension(service_id: str, api_key: str = Depends(verify_api_key)):
+    return _install_extension(service_id, api_key=api_key)
+
+
+def _install_extension(service_id: str, api_key: str, operation_id: str | None = None):
     """Install an extension from the library."""
     _validate_service_id(service_id)
+    if operation_id is not None and (not isinstance(operation_id, str) or not re.fullmatch(r'[a-f0-9]{32}', operation_id)):
+        raise HTTPException(status_code=400, detail='Invalid installation operation identity')
     _assert_not_core(service_id)
 
     dest = USER_EXTENSIONS_DIR / service_id
@@ -2401,7 +2423,8 @@ def install_extension(service_id: str, api_key: str = Depends(verify_api_key)):
     # The setup_hook step internally satisfies the post_install lifecycle
     # contract â€” _resolve_hook("post_install") falls back to manifest's
     # setup_hook field, so we don't double-run it here.
-    agent_ok = _call_agent_install(service_id)
+    agent_ok = (_call_agent_install(service_id, operation_id=operation_id)
+                if operation_id else _call_agent_install(service_id))
 
     if not agent_ok:
         _write_error_progress(
