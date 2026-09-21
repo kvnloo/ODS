@@ -787,3 +787,17 @@ test('team reviewers and coordinators do not receive the website implementation 
     assert.match(value.appendSystemContext,role==='Coordinator'?/JSON/:/read-only/);
   }
 });
+
+
+test("catalog mentions never receive GitHub proposal or single-service mutation instructions", () => {
+  for (const prompt of ["/extensions @invoiceshelf instale pra mim", "/extension @distribution install", "/extensions @crewai"]) {
+    const { appendSystemContext: contract } = promptContractForAgent(
+      { agentId: "pixel" }, "pixel", { prompt }
+    );
+    assert.match(contract, /ods\.extensions\.install-next/);
+    assert.match(contract, /then ods\.extensions\.inspect/);
+    assert.match(contract, /Configuration required is a pending setup state/);
+    assert.match(contract, /never request secret values in chat/);
+    assert.doesNotMatch(contract, /prefer pixel_ods_extension_proposal|recipeJson|single-service mutation|Otherwise submit only the owner's requested/);
+  }
+});
