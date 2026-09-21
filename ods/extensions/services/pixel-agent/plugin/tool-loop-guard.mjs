@@ -269,9 +269,6 @@ export const OPERATIONS_HOST_COMMAND_COMPLETE_REASON =
 export const OPERATIONS_HOST_COMMAND_EVIDENCE_PREFIX =
   "Pixel verified this owner-approved ODS host command through a structurally matched terminal Operations Broker receipt:";
 
-export const WORKSPACE_TOOL_SEARCH_COMPLETE_REASON =
-  "Pixel already resolved the deferred workspace tools. Do not search again. Call tool_call now with the returned exact id, such as openclaw:core:exec, openclaw:core:write, openclaw:core:read, openclaw:core:edit, openclaw:core:apply_patch, or openclaw:core:process, and put that tool's normal arguments in args.";
-
 export const WORKSPACE_UNREQUESTED_PROJECTION_REASON =
   "This is a sandbox workspace task, not an ODS status or application-list request. Do not call pixel_ods_status or pixel_ods_apps_list. Call tool_search once for write read edit apply_patch exec process, then use the returned exact workspace tool id to inspect or change only the owner-requested workspace path.";
 
@@ -339,7 +336,6 @@ const WORKSPACE_CONTINUATION_TOOLS = new Set([
   "read", "write", "edit", "apply_patch", "exec", "process",
   "pixel_ods_evidence_report", "pixel_ods_evidence_readback",
 ]);
-const WORKSPACE_TOOL_SEARCH_QUERY = "write read edit apply_patch exec process";
 const WORKSPACE_INSPECTION_COMPLETE_REASON =
   "The workspace inspection already completed and returned the directory, kernel, and listing; do not search, list, read the directory, or poll again. Continue the owner's requested task now. If the owner requested new files, call tool_call with id openclaw:core:write and args containing the first workspace-relative path and its full content. Do not call exec or process before that write.";
 const FAILED_TEST_READ_REPAIR_REASON =
@@ -6354,8 +6350,6 @@ export function createToolLoopGuard({
         workspacePreview: undefined,
         workspaceLastVerifiedPreview: undefined,
         workspacePreviewVerifiedDirectory: undefined,
-        workspaceToolSearchRouted: false,
-        workspaceToolSearchQueries: new Set(),
         workspaceInspectionRouted: false,
         workspaceInspectionPollCorrections: 0,
         invalidUnittestBlocks: 0,
@@ -7214,37 +7208,9 @@ export function createToolLoopGuard({
         "Do not call tool_search, read, exec, or process before this write."
       );
     };
-    if (state?.workspaceTaskRequested && toolName === "tool_search") {
-      const query = typeof event?.params?.query === "string"
-        ? event.params.query.trim().replace(/\s+/g, " ").toLowerCase()
-        : "";
-      if (!state.workspaceToolSearchRouted) {
-        state.workspaceToolSearchRouted = true;
-        if (query) state.workspaceToolSearchQueries.add(query);
-        state.workspaceToolSearchQueries.add(WORKSPACE_TOOL_SEARCH_QUERY);
-        return {
-          params: { query: WORKSPACE_TOOL_SEARCH_QUERY, limit: 6 },
-        };
-      }
-      // Resolving core file tools does not resolve every capability a task may
-      // need. Let the model discover a different capability (for example the
-      // preview publisher after writing a site). Discovery grants no execution
-      // authority; normal tool permissions and turn limits still apply.
-      if (query && !state.workspaceToolSearchQueries.has(query)) {
-        state.workspaceToolSearchQueries.add(query);
-        return undefined;
-      }
-      if (state.workspaceInspectionRouted) {
-        if (state.workspaceInspectionPollCorrections === 0) {
-          state.workspaceInspectionPollCorrections = 1;
-          return { block: true, blockReason: inspectionCompleteReason() };
-        }
-        state.codingExhausted = true;
-        state.codingTerminalBlocks = 1;
-        return { block: true, blockReason: CODING_RETRY_EXHAUSTED_REASON };
-      }
-      return { block: true, blockReason: WORKSPACE_TOOL_SEARCH_COMPLETE_REASON };
-    }
+    // Discovery is read-only capability lookup, not a workspace plan. Preserve
+    // the model's query and let the shared run budget bound repeated discovery.
+    // Selecting a result still passes the tool's execution policy below.
     if (
       state?.workspaceInspectionRouted &&
       toolName === "tool_call" &&
@@ -8495,8 +8461,6 @@ export function createToolLoopGuard({
             /\b(?:(?:run|execute)\s+(?:the\s+)?(?:unit\s*)?tests?|test\s+suite)\b/i.test(
               currentOwnerIntentText(event?.messages, event?.prompt) ?? ""
             ));
-        state.workspaceToolSearchRouted = false;
-        state.workspaceToolSearchQueries.clear();
         state.recursiveDeleteAuthorized = userMessageAuthorizesRecursiveDelete(
           event?.messages,
           event?.prompt

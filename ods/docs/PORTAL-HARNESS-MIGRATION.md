@@ -346,3 +346,27 @@ Inspected actual configuration: the default sandbox was configured, but Pixel's 
 Real browser session e813ae24-f56a-41fa-a281-da39529947c1 asked the model to create a standard-library CSV sum program and two test files, execute valid and invalid cases, without installing anything. It selected native write three times and exec once. The real execution returned 61/exit=0 for 10.5,20.5,30 and a nonnumeric abc diagnostic/exit=1 for the invalid file; its final answer matched these observations. Read back valid.csv inside /workspace/Playground/harness-check in the actual sandbox container. This qualifies file creation and execution for this bounded WSL/Docker Desktop case, not arbitrary CSV correctness, package acquisition, sandbox networking, 4B behavior or managed extension installation. Lack of pip and isolated dependency acquisition remain preparation limitations.
 
 Removed a second installation guide embedded in API routing context. It duplicated schemas and imposed an explain-before-propose rule even when the owner explicitly requested a research-only proposal. The hint now carries identity, continuity, scope/authority boundaries and an on-demand guide reference; backend recipe/authority checks are unchanged. All 24 request tests passed, including original follow-up identity and unchanged user message, with a bounded routing hint and no mandatory proposal/prepare/advance sequence. Deployed the module and restarted only dashboard-api after the model run was terminal and native active=0. Other keyword-driven planning rules still require migration; this is not a claim that the whole harness is complete.
+
+### General workspace discovery: preserve model-selected capabilities
+
+Removed the workspace-only interception that replaced the first `tool_search` query
+with a fixed file-tool list and rejected subsequent lookups with mandatory write
+instructions. Discovery now preserves the chosen query/limit and does not establish
+execution authority. Regression coverage includes discovery after workspace inspection,
+direct/wrapped admission, and rejection of an unrequested host operation. The shared
+run budget, cancellation, process tracking and publication receipts remain in place.
+This is one migration stage: the legacy inspection adapter and visual-task sequencing
+still exist and must be addressed separately.
+
+Live general-workspace evidence preceding this change: the selected Qwen 3.5 4B
+(32768 context, Sandbox) created a Python CSV program and repaired an initial failure,
+but assumed a header and second-column schema. A natural correction requesting all
+fields and total 61 retained the same project but returned 20.5; repeated invalid
+Python diagnostic commands exhausted the guard. A further corrective turn also
+failed. This demonstrates real tools and file continuity, not reliable task completion.
+No model/context was silently changed to obtain a success. The earlier 27B bounded
+CSV test passed; it does not qualify arbitrary repositories or all CSV semantics.
+
+PR #6156 checks at predecessor a3698647 passed, including integration-smoke run
+35668332362/job 106558927176. These CI checks do not substitute for live cross-platform
+agent and managed-installation qualification.

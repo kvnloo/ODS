@@ -89,7 +89,6 @@ import {
   WEB_FETCH_PUBLIC_ONLY_REASON,
   WEB_LOOP_ABORT_REASON,
   WEB_LOOP_DELIVERY_REASON,
-  WORKSPACE_TOOL_SEARCH_COMPLETE_REASON,
   WORKSPACE_UNREQUESTED_PROJECTION_REASON,
   WORKSPACE_PREVIEW_REQUIRES_TOOL_REASON,
   WORKSPACE_PREVIEW_NOT_CREATED_DELIVERY_PREFIX,
@@ -1278,12 +1277,12 @@ test("workspace discovery permits new capabilities without authorizing their eff
   );
   assert.deepEqual(call(guard, "tool_search", {
     event: { params: { query: "write read edit apply_patch exec process" } },
-  }), { params: { query: "write read edit apply_patch exec process", limit: 6 } });
+  }), undefined);
   for (const query of ["pixel_ods_workspace_preview", "browser verification", "pixel_ods_host_observe"]) {
     assert.equal(call(guard, "tool_search", { event: { params: { query } } }), undefined);
     assert.deepEqual(call(guard, "tool_search", {
       event: { params: { query: `  ${query.toUpperCase().replaceAll(" ", "   ")}  ` } },
-    }), { block: true, blockReason: WORKSPACE_TOOL_SEARCH_COMPLETE_REASON });
+    }), undefined);
   }
   assert.equal(call(guard, "pixel_ops_shell_propose", {
     event: { params: { target: "ods-host", command: "pwd" } },
@@ -1309,25 +1308,12 @@ test("routes a compact workspace task to core tools and blocks unrequested Opera
     "pixel",
     { prompt }
   );
-  assert.deepEqual(
-    call(guard, "tool_search", {
-      event: { params: { query: "probe.py" } },
+  for (const query of ["probe.py", "python documentation", "probe.py"]) {
+    assert.equal(call(guard, "tool_search", {
+      event: { params: { query, limit: 3 } },
       context: { sessionId: undefined },
-    }),
-    {
-      params: {
-        query: "write read edit apply_patch exec process",
-        limit: 6,
-      },
-    }
-  );
-  assert.deepEqual(
-    call(guard, "tool_search", {
-      event: { params: { query: "probe.py" } },
-      context: { sessionId: undefined },
-    }),
-    { block: true, blockReason: WORKSPACE_TOOL_SEARCH_COMPLETE_REASON }
-  );
+    }), undefined, "preserve the selected capability and lookup arguments");
+  }
   const adaptedInspection = call(guard, "tool_call", {
     event: {
       params: {
@@ -1349,6 +1335,15 @@ test("routes a compact workspace task to core tools and blocks unrequested Opera
     "run-1",
     "mkdir -p -- project && pwd && uname -sr && ls -la -- project",
   ]]);
+  // Inspection must not turn a later capability lookup into a forced write.
+  for (const query of ["Python csv documentation", "browser verification"]) {
+    assert.equal(call(guard, "tool_search", {
+      event: { params: { query, limit: 2 } },
+    }), undefined);
+    assert.notEqual(call(guard, "tool_call", {
+      event: { params: { id: "tool_search", args: { query, limit: 2 } } },
+    })?.block, true);
+  }
   const invalidPoll = call(guard, "tool_call", {
     event: {
       params: {
