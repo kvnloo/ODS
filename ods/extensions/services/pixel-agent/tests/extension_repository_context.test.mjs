@@ -54,7 +54,9 @@ test('GitHub installation guidance survives failed evidence reads and goal wrapp
       const value = await context({prompt: `${prefix}/extensions https://github.com/a/b install`});
       assert.match(value, /pixel_ods_extension_proposal/);
       assert.match(value, /pixel_ods_web_extract/);
-      assert.match(value, /do not also save, prepare or install/);
+      assert.match(value, /pixel_ods_extension_request_advance/);
+      assert.match(value, /pending operation must be observed/);
+      assert.match(value, /draft, not an installation/);
       assert.match(value, /Honor research-only requests/);
       assert.match(value, /sandbox does not register an ODS extension/);
     }

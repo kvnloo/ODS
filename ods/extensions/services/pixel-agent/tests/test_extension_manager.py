@@ -1221,6 +1221,21 @@ class RecipeValidationTests(unittest.TestCase):
             self.assertEqual(result, receipt)
             self.assertEqual(observed[-1], ('/api/extensions/github/requests/prepare',
                                            {'chatId': 'chat', 'requestId': 'turn'}))
+            receipt = {'schemaVersion': 1, 'kind': 'ods-extension-request-installation',
+                       'chatId': 'chat', 'requestId': 'turn', 'extensionId': 'example',
+                       'state': 'pending', 'activeExtensionId': 'example',
+                       'operationId': 'a' * 32, 'dispatched': True}
+            advance_envelope = {**status_envelope, 'action': 'github-request-advance'}
+            with tempfile.TemporaryDirectory() as directory:
+                env = pathlib.Path(directory) / '.env'
+                env.write_text('DASHBOARD_API_KEY=' + 'a' * 64 + '\n');env.chmod(0o600)
+                result = manager._advance_request(env, server.server_port, json.dumps(advance_envelope).encode())
+                self.assertEqual(result, receipt)
+                receipt['state'] = 'succeeded'  # Acceptance cannot masquerade as completion.
+                with self.assertRaises(manager.ManagerError):
+                    manager._advance_request(env, server.server_port, json.dumps(advance_envelope).encode())
+            self.assertEqual(observed[-1], ('/api/extensions/github/requests/advance',
+                                           {'chatId': 'chat', 'requestId': 'turn'}))
             for path, body in [('/api/extensions/github/requests', {'action': 'create'}),
                                ('/api/extensions/github/requests/status', {'chatId': '../chat', 'requestId': 'turn'}),
                                ('/api/extensions/github/requests/prepare', {'chatId': 'chat', 'requestId': 'turn', 'draftId': 'd' * 64}),
@@ -1229,7 +1244,7 @@ class RecipeValidationTests(unittest.TestCase):
                 with self.assertRaises(manager.ManagerError):
                     manager._request_json(port=server.server_port, credential='a' * 64, method='POST',
                                           path=path, timeout=2, body=body)
-            self.assertEqual(len(observed), 3)
+            self.assertEqual(len(observed), 5)
         finally:
             server.shutdown();server.server_close();worker.join(timeout=2)
 

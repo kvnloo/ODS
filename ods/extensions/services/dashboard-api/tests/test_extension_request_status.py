@@ -61,3 +61,36 @@ def test_status_distinguishes_proposal_preparation_and_observed_runtime(monkeypa
     assert result['requestState'] == 'cancelled'
     assert result['prepared'] is False and result['runtimeStatus'] == 'not_observed'
     runtime.assert_not_awaited()
+
+
+def test_advance_resolves_only_unchanged_owner_bound_prepared_recipe(monkeypatch, tmp_path):
+    from unittest.mock import Mock
+    requests=tmp_path / '.extension-requests'; requests.mkdir()
+    drafts=tmp_path / '.extension-recipe-drafts'; drafts.mkdir()
+    library=tmp_path / 'library'; library.mkdir()
+    proposal=candidate()
+    monkeypatch.setattr(extensions, '_extensions_lock_path', lambda: tmp_path / '.lock')
+    monkeypatch.setattr(extensions, 'EXTENSIONS_LIBRARY_DIR', library)
+    identity={'chatId':'chat','requestId':'turn'}
+    create_request(requests,'owner','chat','turn','/extensions '+proposal['repository'])
+    draft=save_draft(drafts,'owner',proposal,evidence(proposal))
+    bind_proposal(requests,'owner','chat','turn',proposal,evidence(proposal),draft)
+    advance=Mock(return_value={'state':'pending','activeExtensionId':'apache-answer',
+        'operationId':'a'*32,'dispatched':True})
+    monkeypatch.setattr(extensions,'_advance_extension_installation',advance)
+    def call(owner='owner'):
+        async def receive(): return {'type':'http.request','body':json.dumps(identity).encode()}
+        return asyncio.run(extensions.extension_github_advance_request(
+            Request({'type':'http','method':'POST','headers':[]},receive),api_key=owner))
+    with pytest.raises(extensions.HTTPException): call()
+    advance.assert_not_called()
+    publish_package(library,proposal,evidence(proposal),upstream(proposal))
+    with pytest.raises(extensions.HTTPException): call('another-owner')
+    advance.assert_not_called()
+    result=json.loads(call().body)
+    assert result['extensionId']=='apache-answer' and result['state']=='pending'
+    assert result['operationId']=='a'*32 and result['dispatched'] is True
+    assert advance.call_args.args[3]==identity
+    cancel_request(requests,'owner','chat','turn')
+    with pytest.raises(extensions.HTTPException): call()
+    assert advance.call_count==1

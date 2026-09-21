@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';
-import {createExtensionProposalTool, createPythonLibraryProposalTool, createExtensionRequestStatusTool, createExtensionRequestPrepareTool, submitExtensionProposal} from '../plugin/extension-proposal.mjs';
+import {createExtensionProposalTool, createPythonLibraryProposalTool, createExtensionRequestStatusTool, createExtensionRequestPrepareTool, createExtensionRequestAdvanceTool, submitExtensionProposal} from '../plugin/extension-proposal.mjs';
 
 const context = {agentId: 'pixel', sessionKey: 'agent:pixel:openai-user:ods-' + createHash('sha256').update('chat').digest('hex')};
 const args = {chatId: 'chat', requestId: 'turn', candidate: {repository: 'https://github.com/o/r',
@@ -173,3 +173,39 @@ for (const [platform, path] of [['darwin', '/private/var/lib/ods-pixel-manager/e
     assert.deepEqual(await pending, {ok: true});
   });
 }
+
+
+test('managed advance binds the session and preserves uncertain host outcomes', async () => {
+  const value={schemaVersion:1,kind:'ods-extension-request-installation',chatId:'chat',requestId:'turn',
+    extensionId:'example',state:'pending',activeExtensionId:'example',operationId:'a'.repeat(32),dispatched:true};
+  const calls=[];
+  const tool=createExtensionRequestAdvanceTool(context,{submit:async payload=>{calls.push(payload);return value;}});
+  assert.equal(createExtensionRequestAdvanceTool({...context,agentId:'other'}),null);
+  for(const input of [{chatId:'other',requestId:'turn'}, {chatId:'chat',requestId:'turn',extensionId:'other'}])
+    assert.equal((await tool.execute('id',input)).isError,true);
+  assert.equal(calls.length,0);
+  assert.deepEqual((await tool.execute('id',{chatId:'chat',requestId:'turn'})).details,value);
+  assert.equal(calls[0].action,'github-request-advance');
+  value.state='succeeded';
+  assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).isError,true);
+  value.dispatched=false;value.activeExtensionId=null;value.operationId=null;
+  assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).details.state,'succeeded');
+  value.requestId='different';
+  assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).isError,true);
+});
+
+test('invalid small-model library arguments identify fields without submitting or coercing a version', async () => {
+  const calls=[];
+  const tool=createPythonLibraryProposalTool(context,{submit:async payload=>{calls.push(payload);return receipt;}});
+  const input={chatId:'chat',requestId:'turn',repository:'https://github.com/o/r',commit:'a'.repeat(40),
+    serviceId:'pixel_ods_python_library_proposal',name:'Example',pythonVersion:3.10,pythonImports:['example']};
+  const failure=await tool.execute('id',input);
+  assert.equal(failure.isError,true);
+  assert.match(failure.content[0].text,/serviceId:/);
+  assert.match(failure.content[0].text,/pythonVersion:.*JSON string/);
+  assert.equal(calls.length,0);
+  const repaired=await tool.execute('id',{...input,serviceId:'example',pythonVersion:'3.10'});
+  assert.equal(repaired.isError,undefined);
+  assert.equal(calls.length,1);
+  assert.match(calls[0].candidate.compose.services.example.build.dockerfile_inline,/FROM python:3\.10-slim/);
+});

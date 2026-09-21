@@ -52,7 +52,7 @@ export function createPythonLibraryProposalTool(context, dependencies = {}) {
     properties:Object.fromEntries(fields.map(key => [key,
       key === 'chatId' || key === 'requestId' ? proposal.parameters.properties[key] : sourceRecipeSchema.properties[key]]))};
   parameters.properties.pythonVersion = {...parameters.properties.pythonVersion,
-    description:'Python 3 minor version supported by the inspected project metadata, for example 3.12.'};
+    description:'JSON string for a Python 3 minor version supported by inspected metadata, for example "3.12". Never send a number.'};
   parameters.properties.pythonImports = {...parameters.properties.pythonImports,
     description:'Actual Python module names used in upstream import statements, e.g. ["actual_package"]. ODS verifies that these modules import successfully after installing the pinned source.'};
   return {
@@ -65,6 +65,35 @@ export function createPythonLibraryProposalTool(context, dependencies = {}) {
       })}]};
       const {chatId, requestId, ...source} = args;
       return proposal.execute(id,{chatId,requestId,source:{...source,port:0,cliOnly:true}});
+    },
+  };
+}
+
+export function createExtensionRequestAdvanceTool(context, {submit = submitExtensionProposal} = {}) {
+  if (!createExtensionRequestStatusTool(context)) return null;
+  return {
+    name:'pixel_ods_extension_request_advance', label:'Install prepared ODS extension',
+    description:'Advance installation of this conversation’s accepted, prepared GitHub recipe when the owner has requested installation. Supply the original chatId/requestId, including follow-ups. ODS resolves the extension and dependencies from saved state and records the host attempt before dispatch. Repeating this call observes an unresolved attempt instead of duplicating it. pending means still running; succeeded requires host completion and runtime observation. Stop advancing on failed, blocked, configuration_required or reconciliation_required and inspect the reported state. This does not run arbitrary host commands or verify application behavior beyond the recipe checks.',
+    parameters:{type:'object',additionalProperties:false,required:['chatId','requestId'],properties:{
+      chatId:{type:'string',pattern:'^[A-Za-z0-9_-]{1,128}$'}, requestId:{type:'string',pattern:'^[A-Za-z0-9_-]{1,128}$'},
+    }},
+    async execute(_id,args) {
+      const unknown={isError:true,content:[{type:'text',text:'Installation outcome is unconfirmed. Inspect this saved request before further action; a host operation may already exist.'}]};
+      if (!exact(args,['chatId','requestId']) || ![args.chatId,args.requestId].every(x=>typeof x==='string' && ID.test(x))
+          || context.sessionKey !== PREFIX+createHash('sha256').update(args.chatId).digest('hex')) return unknown;
+      try {
+        const value=await submit({schemaVersion:1,action:'github-request-advance',...args});
+        const service=x=>typeof x==='string' && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(x);
+        if (!exact(value,['schemaVersion','kind','chatId','requestId','extensionId','state','activeExtensionId','operationId','dispatched'])
+            || value.schemaVersion!==1 || value.kind!=='ods-extension-request-installation'
+            || value.chatId!==args.chatId || value.requestId!==args.requestId || !service(value.extensionId)
+            || !['pending','succeeded','failed','blocked','configuration_required','reconciliation_required'].includes(value.state)
+            || (value.activeExtensionId!==null && !service(value.activeExtensionId))
+            || (value.operationId!==null && !(typeof value.operationId==='string' && /^[a-f0-9]{32}$/.test(value.operationId)))
+            || typeof value.dispatched!=='boolean'
+            || (value.state==='succeeded' && (value.dispatched || value.activeExtensionId!==null))) return unknown;
+        return {content:[{type:'text',text:JSON.stringify(value)}],details:value};
+      } catch {return unknown;}
     },
   };
 }
@@ -96,8 +125,8 @@ export function createExtensionRequestPrepareTool(context, {submit = submitExten
   };
 }
 
-// This channel can only bind a proposal to an existing owner request. It has
-// no lifecycle operation, arbitrary URL, shell command or credential parameter.
+// This channel operates only on existing owner-bound requests. Host advancement
+// resolves its immutable recipe server-side; no command, target or credential input.
 export function submitExtensionProposal(payload, {connect = net.createConnection, platform = process.platform} = {}) {
   return new Promise((resolve, reject) => {
     const socket = connect({path: managerSocket(platform)});
@@ -109,7 +138,7 @@ export function submitExtensionProposal(payload, {connect = net.createConnection
       socket.destroy();
       if (error) reject(new Error('Extension proposal unavailable')); else resolve(value);
     };
-    const timer = setTimeout(() => finish(true), payload?.action === 'github-request-prepare' ? 105000 : 45000);
+    const timer = setTimeout(() => finish(true), ['github-request-prepare','github-request-advance'].includes(payload?.action) ? 105000 : 45000);
     socket.on('connect', () => socket.write(JSON.stringify(payload) + '\n'));
     socket.on('error', () => finish(true));
     socket.on('end', () => finish(true));
@@ -176,7 +205,7 @@ export function createExtensionProposalTool(context, {submit = submitExtensionPr
           catch (failure) { return invalid(failure.message); }
         }
         if (!exact(args, ['chatId', 'requestId', 'candidate'])) {
-          return invalid('Use exactly chatId, requestId and source (one researched source service), or chatId, requestId and candidate (advanced recipe). Obtain routing IDs from the current request context. There is no action/install/status parameter: after a successful draft, the coordinator owns installation.', true);
+          return invalid('Use exactly chatId, requestId and source (one researched source service), or chatId, requestId and candidate (advanced recipe). Obtain routing IDs from the current request context. This tool saves a draft only. Managed request status, preparation and advancement are separate tools.', true);
         }
         if (typeof args.chatId !== 'string' || typeof args.requestId !== 'string' ||
             !ID.test(args.chatId) || !ID.test(args.requestId) ||

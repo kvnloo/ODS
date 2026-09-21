@@ -58,7 +58,7 @@ def test_shared_overlay_is_staged_idempotent_and_uses_selected_home(tmp_path, co
     assert 'pixel_ods_extension_proposal' in value['tools']['alsoAllow']
     assert 'pixel_ods_extension_proposal' in value['tools']['sandbox']['tools']['allow']
     assert 'pixel_ods_extension_proposal' not in agent['tools']['deny']
-    for tool in ('pixel_ods_python_library_proposal', 'pixel_ods_extension_request_status', 'pixel_ods_extension_request_prepare'):
+    for tool in ('pixel_ods_python_library_proposal', 'pixel_ods_extension_request_status', 'pixel_ods_extension_request_prepare', 'pixel_ods_extension_request_advance'):
         assert tool in value['tools']['alsoAllow']
         assert tool in value['tools']['sandbox']['tools']['allow']
         assert tool not in agent['tools']['deny']

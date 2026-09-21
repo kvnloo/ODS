@@ -3,7 +3,9 @@
   "name": "Pixel ODS Integration",
   "description": "ODS status, delegated Perplexica research, guarded public-page evidence, verified downloads, and isolated workspace previews for Pixel.",
   "version": "1.0.0",
-  "providers": ["ods-policy"],
+  "providers": [
+    "ods-policy"
+  ],
   "contracts": {
     "tools": [
       "pixel_ods_goal",
@@ -24,14 +26,23 @@
       "pixel_ods_web_extract",
       "pixel_ods_download_promote",
       "pixel_ods_workspace_preview",
-      "pixel_ods_research"
+      "pixel_ods_research",
+      "pixel_ods_extension_request_advance"
     ]
   },
   "toolMetadata": {
-    "pixel_ods_goal": {"replaySafe": true},
-    "pixel_ods_activity": {"replaySafe": true},
-    "pixel_ods_history": {"replaySafe": true},
-    "pixel_ods_ask_user": {"replaySafe": true},
+    "pixel_ods_goal": {
+      "replaySafe": true
+    },
+    "pixel_ods_activity": {
+      "replaySafe": true
+    },
+    "pixel_ods_history": {
+      "replaySafe": true
+    },
+    "pixel_ods_ask_user": {
+      "replaySafe": true
+    },
     "pixel_ods_status": {
       "replaySafe": true
     },
@@ -55,12 +66,28 @@
       "managedProvider": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["schemaVersion", "activationId", "revision", "allowCloud"],
+        "required": [
+          "schemaVersion",
+          "activationId",
+          "revision",
+          "allowCloud"
+        ],
         "properties": {
-          "schemaVersion": {"const": 1},
-          "activationId": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
-          "revision": {"type": "integer", "minimum": 0, "maximum": 9007199254740991},
-          "allowCloud": {"type": "boolean"}
+          "schemaVersion": {
+            "const": 1
+          },
+          "activationId": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "allowCloud": {
+            "type": "boolean"
+          }
         }
       },
       "modelContextWindow": {
@@ -75,7 +102,10 @@
       },
       "workspacePreviewTransport": {
         "type": "string",
-        "enum": ["unix", "docker-desktop"],
+        "enum": [
+          "unix",
+          "docker-desktop"
+        ],
         "default": "unix"
       },
       "leanPrompt": {

@@ -43,14 +43,23 @@ export function compileSourceRecipe(source) {
     }
     command = ['python', '-c', `import importlib; [importlib.import_module(name) for name in ${JSON.stringify(modules)}]`];
   }
-  if (typeof repository !== 'string' || !/^https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}\/?$/.test(repository)
-      || typeof commit !== 'string' || !/^[a-f0-9]{40}$/.test(commit)
-      || typeof serviceId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(serviceId)
-      || typeof name !== 'string' || !name.trim() || name.length > 160
-      || !Number.isInteger(port) || port < 0 || port > 65535
-      || typeof healthPath !== 'string' || healthPath.length > 256
-      || (healthPath !== '' && !/^\/[A-Za-z0-9_/.~-]*$/.test(healthPath))
-      || typeof cliOnly !== 'boolean') throw Error('Use a public repository, verified commit and valid service metadata.');
+  const issues = [];
+  if (typeof repository !== 'string' || !/^https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}\/?$/.test(repository))
+    issues.push('repository: expected a public https://github.com/OWNER/REPO URL');
+  if (typeof commit !== 'string' || !/^[a-f0-9]{40}$/.test(commit))
+    issues.push('commit: expected a verified full 40-character lowercase commit SHA');
+  if (typeof serviceId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(serviceId))
+    issues.push('serviceId: expected a project identifier of 1–64 lowercase letters, digits or hyphens, starting with a letter or digit; not a tool name');
+  if (typeof name !== 'string' || !name.trim() || name.length > 160)
+    issues.push('name: expected a nonempty display name up to 160 characters');
+  if (!Number.isInteger(port) || port < 0 || port > 65535)
+    issues.push('port: expected an integer from 0 to 65535');
+  if (typeof healthPath !== 'string' || healthPath.length > 256 || (healthPath !== '' && !/^\/[A-Za-z0-9_/.~-]*$/.test(healthPath)))
+    issues.push('healthPath: expected an empty string or an HTTP path starting with /');
+  if (typeof cliOnly !== 'boolean') issues.push('cliOnly: expected a boolean');
+  if (source.pythonVersion !== undefined && (typeof source.pythonVersion !== 'string' || !/^3\.(10|11|12|13|14)$/.test(source.pythonVersion)))
+    issues.push('pythonVersion: expected a JSON string such as "3.10", not a number; select a supported version from inspected project metadata');
+  if (issues.length) throw Error(issues.join('; ') + '. Correct these fields on the same tool.');
   const strings = value => Array.isArray(value) && value.length > 0 && value.length <= 32
     && value.every(item => typeof item === 'string' && item.length > 0 && item.length <= 4096 && !item.includes('\0'));
   if (cliOnly && command === undefined) {

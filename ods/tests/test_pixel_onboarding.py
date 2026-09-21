@@ -44,7 +44,7 @@ def test_shared_contract_and_private_output(contract):
     assert value["workspace"] == str(Path(args[2]) / ".openclaw/workspace-pixel")
     assert "pixel_ods_workspace_preview" in value["gatewayExtensions"][0]["tools"]
     assert {'pixel_ods_python_library_proposal', 'pixel_ods_extension_request_status',
-            'pixel_ods_extension_request_prepare'}.issubset(value['gatewayExtensions'][0]['tools'])
+            'pixel_ods_extension_request_prepare', 'pixel_ods_extension_request_advance'}.issubset(value['gatewayExtensions'][0]['tools'])
     assert value["operationsLimbEnabled"] is True
     assert answers.stat().st_mode & 0o777 == 0o600
     assert not result.stdout

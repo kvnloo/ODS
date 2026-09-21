@@ -1351,7 +1351,7 @@ async def extension_install_plan(service_id: str, api_key: str = Depends(verify_
         raise HTTPException(status_code=400, detail="Extension installation prerequisites are invalid") from exc
 
 
-def _advance_extension_installation(service_id: str, api_key: str, loop):
+def _advance_extension_installation(service_id: str, api_key: str, loop, request_identity=None):
     from extension_installation import InstallationJournal, advance_installation
 
     # Separate from _extensions_lock: the existing installers acquire that
@@ -1381,6 +1381,9 @@ def _advance_extension_installation(service_id: str, api_key: str, loop):
                 raise
 
         def dispatch(target, action, *, operation_id=None):
+            if request_identity is not None:
+                if _bound_prepared_request(api_key, request_identity) != service_id:
+                    raise ValueError('Prepared request changed before dispatch')
             # advance_installation already holds the exact same lifecycle
             # lock as the public endpoints. Do not recursively acquire it.
             if action == "install":
@@ -1399,6 +1402,42 @@ def _advance_extension_installation(service_id: str, api_key: str, loop):
             return response.get('operation') if isinstance(response, dict) else None
 
         return advance_installation(read_plan, journal, _extension_operation_lock, dispatch, observe=observe)
+
+
+def _bound_prepared_request(owner, identity):
+    """Resolve authority from the saved owner request, never model-supplied IDs."""
+    from extension_requests import read_request
+    from extension_recipe_drafts import read_draft
+    from extension_recipe_package import recipe_digest, verify_package
+    if not isinstance(identity, dict) or set(identity) != {'chatId', 'requestId'}:
+        raise ValueError('Invalid extension request identity')
+    with _extensions_lock():
+        parent = _extensions_lock_path().parent.resolve()
+        current = read_request(parent / '.extension-requests', owner, identity['chatId'], identity['requestId'])
+        proposal = current.get('proposal')
+        if current['state'] != 'pending' or not proposal:
+            raise ValueError('No active extension proposal')
+        candidate = read_draft(parent / '.extension-recipe-drafts', owner, proposal['draftId'])
+        if (recipe_digest(candidate) != proposal['recipeDigest']
+                or candidate['manifest']['service']['id'] != proposal['extensionId']):
+            raise ValueError('Bound proposal changed')
+        verify_package(EXTENSIONS_LIBRARY_DIR / proposal['extensionId'], candidate)
+        return proposal['extensionId']
+
+
+@router.post('/api/extensions/github/requests/advance')
+async def extension_github_advance_request(request: Request, api_key: str = Depends(verify_api_key)):
+    identity = await _github_recipe_payload(request)
+    try:
+        service_id = await asyncio.to_thread(_bound_prepared_request, api_key, identity)
+        result = await asyncio.to_thread(_advance_extension_installation, service_id, api_key,
+                                        asyncio.get_running_loop(), identity)
+    except (ValueError, OSError, KeyError, TypeError, yaml.YAMLError):
+        raise HTTPException(status_code=409, detail='Managed installation requires an active prepared request') from None
+    return JSONResponse({'schemaVersion': 1, 'kind': 'ods-extension-request-installation',
+        **identity, 'extensionId': service_id, 'state': result['state'],
+        'activeExtensionId': result['activeExtensionId'], 'operationId': result['operationId'],
+        'dispatched': result['dispatched']}, headers={'Cache-Control': 'no-store'})
 
 
 @router.post("/api/extensions/{service_id}/install-next")

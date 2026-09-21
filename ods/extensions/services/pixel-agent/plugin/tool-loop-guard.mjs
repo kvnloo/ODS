@@ -6494,12 +6494,12 @@ export function createToolLoopGuard({
     // even if the package command happens to succeed. Keep research and owner
     // clarification available without permitting a second installation path.
     if (state?.githubExtensionRequest && ![
-      'tool_search', 'tool_describe', 'pixel_ods_extension_proposal', 'pixel_ods_python_library_proposal', 'pixel_ods_extension_request_status', 'pixel_ods_extension_request_prepare',
+      'tool_search', 'tool_describe', 'pixel_ods_extension_proposal', 'pixel_ods_python_library_proposal', 'pixel_ods_extension_request_status', 'pixel_ods_extension_request_prepare', 'pixel_ods_extension_request_advance',
       'pixel_ods_web_extract', 'pixel_ods_research', 'web_search', 'web_fetch',
       'read', 'pixel_ods_ask_user', 'pixel_ods_goal', 'pixel_ods_activity',
       'pixel_ods_history', 'session_status', 'memory_search', 'memory_get',
     ].includes(delegatedName)) {
-      return {block: true, blockReason: 'This /extensions GitHub request installs through the ODS extension coordinator, not sandbox commands or separate Operations jobs. Research the repository with pixel_ods_web_extract; submit its researched Dockerfile and verification command with pixel_ods_extension_proposal using the current routing IDs. If the source is a library, use cliOnly with a real verification command. Do not run pip, create a venv, or install another copy in the workspace. Use the request status and preparation tools to observe or prepare the accepted recipe; the coordinator owns host installation.'};
+      return {block: true, blockReason: 'This tool is not available in the current GitHub extension request. Use tool_search/tool_describe to obtain an existing tool ID and its exact schema; do not invent tool names. Research and proposal tools do not install. pixel_ods_extension_request_status observes the saved request; pixel_ods_extension_request_prepare publishes its accepted recipe; pixel_ods_extension_request_advance manages an owner-requested host installation. Use the original routing IDs. Sandbox commands cannot establish a managed ODS installation.'};
     }
     const asksOwner = toolName === 'pixel_ods_ask_user' || (toolName === 'tool_call' && ['pixel_ods_ask_user','openclaw:pixel-ods:pixel_ods_ask_user'].includes(event?.params?.id));
     if (asksOwner || ['pixel_ods_goal','pixel_ods_activity'].includes(delegatedName)) return state?.clientCancelled ? {block:true,blockReason:CLIENT_CANCELLED_REASON} : undefined;
