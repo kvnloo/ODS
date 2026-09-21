@@ -36,11 +36,11 @@ def model_request_context(command, chat_id, request_id):
     return {'role': 'system', 'content': (
         'Current GitHub extension request routing context: ' + json.dumps({
             'chatId': chat_id, 'requestId': request_id, 'repository': repository,
-        }, sort_keys=True) + '. Use these exact identifiers when a request-scoped extension '
-        'proposal tool is available. Research the requested repository and submit its actual '
+        }, sort_keys=True) + '. ODS retains these routing facts for request-scoped extension '
+        'tools; the model need not provide them. Research the requested repository and submit its actual '
         'installation recipe when the owner asks to proceed; preserve their requirements. '
         'For research-only requests, explain the findings before proposing installation. '
-        'For a standard Python library use pixel_ods_python_library_proposal with its eight flat fields. For other services use pixel_ods_extension_proposal with chatId, requestId and source. '
+        'For a standard Python library use pixel_ods_python_library_proposal with its six recipe fields. For other services use pixel_ods_extension_proposal with source or candidate; its adapter resolves the session identity. '
         'ODS constructs manifest/Compose from the researched Dockerfile and runtime checks. '
         'Use the selected tool schema; describe it if its fields are not already available. '
         'Installing packages in the agent sandbox does not register an ODS extension. '

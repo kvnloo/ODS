@@ -10,6 +10,34 @@ const args = {chatId: 'chat', requestId: 'turn', candidate: {repository: 'https:
 const receipt = {schemaVersion: 1, kind: 'ods-extension-request-proposal', chatId: 'chat', requestId: 'turn',
   state: 'pending', installationStarted: false, proposal: {draftId: 'b'.repeat(64), recipeDigest: 'c'.repeat(64), extensionId: 'example'}};
 
+for (const [factory, input] of [
+  [createExtensionProposalTool,{candidate:args.candidate}],
+  [createPythonLibraryProposalTool,{repository:'https://github.com/o/r',commit:'a'.repeat(40),
+    serviceId:'example',name:'Example',pythonVersion:'3.12',pythonImports:['example']}],
+]) test(`${factory.name} resolves proposal identity without model routing fields`,async()=>{
+  const calls=[];
+  let request={chatId:'chat',requestId:'turn'};
+  const tool=factory(context,{submit:async payload=>{
+    calls.push(payload);
+    return payload.action==='github-request-resolve'
+      ? {schemaVersion:1,kind:'ods-extension-request-scope',sessionHash:context.sessionKey.split('ods-')[1],request}
+      : receipt;
+  }});
+  assert.equal(tool.parameters.properties.chatId,undefined);
+  assert.equal(tool.parameters.properties.requestId,undefined);
+  assert.equal((await tool.execute('proposal',input)).isError,undefined);
+  assert.equal(calls.length,2);
+  assert.equal(calls[1].action,'github-request-propose');
+  assert.equal(calls[1].chatId,'chat');
+  assert.equal(calls[1].requestId,'turn');
+  assert.equal(calls[1].candidate.repository,input.repository ?? input.candidate.repository);
+  for (const scope of [null,{chatId:'foreign',requestId:'turn'}]) {
+    request=scope; calls.length=0;
+    assert.equal((await tool.execute('proposal',input)).isError,true);
+    assert.equal(calls.length,1,'no draft submission without verified session scope');
+  }
+});
+
 for (const [factory, action] of [[createExtensionRequestStatusTool,'status'],
   [createExtensionRequestPrepareTool,'prepare'], [createExtensionRequestAdvanceTool,'advance']]) {
   test(`${action} binds empty arguments to the trusted session and rejects foreign scope`, async () => {
@@ -123,7 +151,7 @@ test('wrong tool arguments return the actual schema without echoing submitted qu
   const detail = JSON.parse(result.content[0].text);
   assert.equal(result.isError, true);
   assert.equal(detail.proposalSubmitted, false);
-  assert.deepEqual(detail.parameters.required, ['chatId','requestId','source']);
+  assert.deepEqual(detail.parameters.required, ['source']);
   assert.deepEqual(detail.parameters.properties.source, tool.parameters.properties.source.description
     ? Object.fromEntries(Object.entries(tool.parameters.properties.source).filter(([key]) => key !== 'description'))
     : tool.parameters.properties.source);
