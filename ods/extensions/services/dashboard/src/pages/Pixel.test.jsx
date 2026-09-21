@@ -901,11 +901,13 @@ describe('Pixel', () => {
     await screen.findByText('Available')
     fireEvent.change(screen.getByPlaceholderText('Message Portal...'), {target: {value: 'continue'}})
     fireEvent.click(screen.getByTitle('Send'))
-    await screen.findByText('Latest answer')
+    // Rendering sixty Markdown messages plus animated text can exceed the
+    // default one-second DOM wait on Windows CI. Keep the same visible/persisted contract.
+    await screen.findByText('Latest answer', {}, {timeout: 5000})
     expect(screen.getByText('History item 0')).toBeVisible()
     const call = globalThis.fetch.mock.calls.find(([url]) => url === '/api/pixel/chat/stream')
     expect(JSON.parse(call[1].body).messages.length).toBeLessThanOrEqual(50)
-    expect(JSON.parse(localStorage.getItem('ods.pixel.chat.v1')).messages).toHaveLength(62)
+    await waitFor(() => expect(JSON.parse(localStorage.getItem('ods.pixel.chat.v1')).messages).toHaveLength(62))
     view.unmount()
     render(<Pixel />)
     expect(screen.getByText('History item 0')).toBeVisible()

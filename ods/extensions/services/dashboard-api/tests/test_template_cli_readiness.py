@@ -2,6 +2,7 @@
 
 from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -37,7 +38,15 @@ def cli_template(tmp_path, monkeypatch):
     monkeypatch.setattr(templates, "USER_EXTENSIONS_DIR", user_dir)
     monkeypatch.setattr(extensions, "EXTENSIONS_DIR", tmp_path / "builtins")
     monkeypatch.setattr(extensions, "EXTENSIONS_LIBRARY_DIR", tmp_path / "library")
-    monkeypatch.setattr(helpers, "get_cached_services", lambda: [])
+    # Aider now uses the selected ODS model through the existing gateway.
+    # Model its real dependency as installed and healthy, without starting it.
+    gateway = tmp_path / "builtins" / "litellm"
+    gateway.mkdir(parents=True)
+    (gateway / "manifest.yaml").write_text(yaml.safe_dump({"service": {
+        "id": "litellm", "depends_on": [], "type": "docker", "category": "optional",
+    }}))
+    (gateway / "compose.yaml").write_text("services: {litellm: {image: example/gateway:fixture}}")
+    monkeypatch.setattr(helpers, "get_cached_services", lambda: [SimpleNamespace(id="litellm", status="healthy")])
     monkeypatch.setattr(extensions, "_read_progress", lambda _sid: None)
     monkeypatch.setattr(extensions, "_extensions_lock", nullcontext)
     monkeypatch.setattr(extensions, "_call_agent_invalidate_compose_cache", lambda: None)
