@@ -2,13 +2,32 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';
-import {createExtensionProposalTool, createPythonLibraryProposalTool, submitExtensionProposal} from '../plugin/extension-proposal.mjs';
+import {createExtensionProposalTool, createPythonLibraryProposalTool, createExtensionRequestStatusTool, submitExtensionProposal} from '../plugin/extension-proposal.mjs';
 
 const context = {agentId: 'pixel', sessionKey: 'agent:pixel:openai-user:ods-' + createHash('sha256').update('chat').digest('hex')};
 const args = {chatId: 'chat', requestId: 'turn', candidate: {repository: 'https://github.com/o/r',
   commit: 'a'.repeat(40), manifest: {service: {id: 'example'}}, compose: {services: {}}}};
 const receipt = {schemaVersion: 1, kind: 'ods-extension-request-proposal', chatId: 'chat', requestId: 'turn',
   state: 'pending', installationStarted: false, proposal: {draftId: 'b'.repeat(64), recipeDigest: 'c'.repeat(64), extensionId: 'example'}};
+
+test('request status is owner-bound, read-only and never promotes missing evidence to success', async () => {
+  const value={schemaVersion:1,kind:'ods-extension-request-status',chatId:'chat',requestId:'turn',
+    requestState:'pending',proposalAccepted:true,prepared:false,extensionId:'example',runtimeStatus:'not_observed'};
+  const calls=[];
+  const tool=createExtensionRequestStatusTool(context,{submit:async payload=>{calls.push(payload);return value;}});
+  assert.equal(createExtensionRequestStatusTool({...context,agentId:'other'}),null);
+  assert.equal((await tool.execute('id',{chatId:'other',requestId:'turn'})).isError,true);
+  assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn',action:'install'})).isError,true);
+  assert.equal(calls.length,0);
+  assert.deepEqual((await tool.execute('id',{chatId:'chat',requestId:'turn'})).details,value);
+  assert.equal(calls[0].action,'github-request-status');
+  value.runtimeStatus='enabled';
+  assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).isError,true);
+  value.prepared=true;
+  assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).details.runtimeStatus,'enabled');
+  value.requestId='other';
+  assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).isError,true);
+});
 
 test('only Portal sessions can submit proposals for their own conversation', async () => {
   let calls = 0;

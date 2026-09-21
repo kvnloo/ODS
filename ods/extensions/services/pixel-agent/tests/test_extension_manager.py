@@ -1069,6 +1069,21 @@ class RecipeValidationTests(unittest.TestCase):
         connection.close.assert_called_once()
 
 
+    def test_scoped_request_status_is_fixed_read_and_rejects_inconsistent_receipts(self):
+        envelope = {'schemaVersion': 1, 'action': 'github-request-status', 'chatId': 'chat', 'requestId': 'turn'}
+        receipt = {'schemaVersion': 1, 'kind': 'ods-extension-request-status', 'chatId': 'chat', 'requestId': 'turn',
+                   'requestState': 'pending', 'proposalAccepted': True, 'prepared': False,
+                   'extensionId': 'example', 'runtimeStatus': 'not_observed'}
+        with mock.patch.object(manager, '_read_env', return_value={'DASHBOARD_API_KEY': 'a' * 64}), \
+             mock.patch.object(manager, '_request_json', return_value=(200, receipt)) as request:
+            self.assertEqual(manager._read_request_status(pathlib.Path('/unused'), 3002, json.dumps(envelope).encode()), receipt)
+            self.assertEqual(request.call_args.kwargs['path'], '/api/extensions/github/requests/status')
+            self.assertEqual(request.call_args.kwargs['body'], {'chatId': 'chat', 'requestId': 'turn'})
+            for change in [{'requestId': 'other'}, {'runtimeStatus': 'enabled'}, {'extensionId': '../escape'}, {'secret': 'never-return'}]:
+                request.return_value = (200, {**receipt, **change})
+                with self.assertRaises(manager.ManagerError):
+                    manager._read_request_status(pathlib.Path('/unused'), 3002, json.dumps(envelope).encode())
+
     def test_scoped_proposal_only_posts_to_bound_api_route(self):
         env_patch = mock.patch.object(manager, '_read_env', return_value={'DASHBOARD_API_KEY': 'a' * 64})
         env_patch.start()

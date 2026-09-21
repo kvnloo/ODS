@@ -45,7 +45,8 @@ def model_request_context(command, chat_id, request_id):
         'Use the selected tool schema; describe it if its fields are not already available. '
         'Installing packages in the agent sandbox does not register an ODS extension. '
         'A follow-up message can continue this request, but unrelated chat is not permission '
-        'to advance it. This context does not grant '
+        'to advance it. Use pixel_ods_extension_request_status with these original chatId/requestId '
+        'to observe a saved proposal and its managed runtime; this read does not install anything. This context does not grant '
         'execution authority: the backend must confirm an active owner request and matching '
         'validated recipe before proceeding. A saved or available recipe is not an installed application.'
     )}

@@ -10,9 +10,40 @@ const managerSocket = platform => platform === 'darwin'
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).sort().join() === [...keys].sort().join();
 
+// Read managed state through the same session-bound channel as proposals.
+export function createExtensionRequestStatusTool(context, {submit = submitExtensionProposal} = {}) {
+  if (context?.agentId !== 'pixel' || typeof context.sessionKey !== 'string'
+      || !/^agent:pixel:openai-user:ods-[a-f0-9]{64}$/.test(context.sessionKey)) return null;
+  return {
+    name:'pixel_ods_extension_request_status', label:'Check extension request',
+    description:'Read the saved GitHub extension request and its observed managed runtime state. Use the original chatId and requestId from routing context, including on follow-up turns. Does not prepare, install, restart or change anything. Proposal acceptance and preparation do not establish installation success; not_observed means unknown. cli_installed establishes the configured CLI verification, not every possible application behavior.',
+    parameters:{type:'object',additionalProperties:false,required:['chatId','requestId'],properties:{
+      chatId:{type:'string',pattern:'^[A-Za-z0-9_-]{1,128}$'},
+      requestId:{type:'string',pattern:'^[A-Za-z0-9_-]{1,128}$'},
+    }},
+    async execute(_id,args) {
+      const unavailable={isError:true,content:[{type:'text',text:'The saved extension request could not be observed. No installation was started; its outcome remains unknown.'}]};
+      if (!exact(args,['chatId','requestId']) || ![args.chatId,args.requestId].every(x=>typeof x==='string' && ID.test(x))
+          || context.sessionKey !== PREFIX+createHash('sha256').update(args.chatId).digest('hex')) return unavailable;
+      try {
+        const value=await submit({schemaVersion:1,action:'github-request-status',...args});
+        if (!exact(value,['schemaVersion','kind','chatId','requestId','requestState','proposalAccepted','prepared','extensionId','runtimeStatus'])
+            || value.schemaVersion!==1 || value.kind!=='ods-extension-request-status'
+            || value.chatId!==args.chatId || value.requestId!==args.requestId
+            || !['pending','cancelled','expired'].includes(value.requestState)
+            || typeof value.proposalAccepted!=='boolean' || typeof value.prepared!=='boolean'
+            || (value.extensionId!==null && (typeof value.extensionId!=='string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(value.extensionId)))
+            || !['not_observed','enabled','cli_installed','disabled','stopped','not_installed','installing','setting_up','unhealthy','error','unavailable'].includes(value.runtimeStatus)
+            || (value.prepared && (!value.proposalAccepted || !value.extensionId))
+            || (value.runtimeStatus!=='not_observed' && !value.prepared)) return unavailable;
+        return {content:[{type:'text',text:JSON.stringify(value)}],details:value};
+      } catch {return unavailable;}
+    },
+  };
+}
+
 // A library has neither a server port nor a CLI entrypoint by default. Give
-// small models one flat, non-ambiguous contract while sharing the same scoped
-// proposal transport, source compiler and backend verification as every recipe.
+// small models one flat contract using the existing source compiler.
 export function createPythonLibraryProposalTool(context, dependencies = {}) {
   const proposal = createExtensionProposalTool(context, dependencies);
   if (!proposal) return null;

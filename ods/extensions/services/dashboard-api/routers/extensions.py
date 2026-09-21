@@ -1524,6 +1524,54 @@ async def extension_github_request(request: Request, api_key: str = Depends(veri
     return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
 
+@router.post("/api/extensions/github/requests/status")
+async def extension_github_request_status(request: Request, api_key: str = Depends(verify_api_key)):
+    """Read one owner's proposal and observed runtime without advancing it."""
+    from extension_requests import read_request
+    from extension_recipe_drafts import read_draft
+    from extension_recipe_package import verify_package, recipe_digest
+    payload = await _github_recipe_payload(request)
+    if not isinstance(payload, dict) or set(payload) != {'chatId', 'requestId'}:
+        raise HTTPException(status_code=400, detail='Invalid extension request')
+
+    def observe():
+        with _extensions_lock():
+            parent = _extensions_lock_path().parent.resolve()
+            current = read_request(parent / '.extension-requests', api_key,
+                                   payload['chatId'], payload['requestId'])
+            result = {'schemaVersion': 1, 'kind': 'ods-extension-request-status',
+                      **payload, 'requestState': current['state'],
+                      'proposalAccepted': bool(current.get('proposal')), 'prepared': False,
+                      'extensionId': None, 'runtimeStatus': 'not_observed'}
+            if not current.get('proposal') or current['state'] != 'pending':
+                return result
+            bound = current['proposal']
+            candidate = read_draft(parent / '.extension-recipe-drafts', api_key, bound['draftId'])
+            if (recipe_digest(candidate) != bound['recipeDigest']
+                    or candidate['manifest']['service']['id'] != bound['extensionId']):
+                raise ValueError('Bound proposal changed')
+            result['extensionId'] = bound['extensionId']
+            destination = EXTENSIONS_LIBRARY_DIR / bound['extensionId']
+            if destination.exists() or destination.is_symlink():
+                verify_package(destination, candidate)
+                result['prepared'] = True
+            return result
+    try:
+        result = await asyncio.to_thread(observe)
+    except (ValueError, OSError, KeyError, TypeError, yaml.YAMLError):
+        raise HTTPException(status_code=409, detail='Extension request status requires inspection') from None
+    if result['prepared']:
+        try:
+            detail = await asyncio.wait_for(extension_detail(result['extensionId'], api_key=api_key), timeout=15)
+            status = detail.get('status')
+            if status in {'enabled', 'cli_installed', 'disabled', 'stopped', 'not_installed',
+                          'installing', 'setting_up', 'unhealthy', 'error', 'unavailable'}:
+                result['runtimeStatus'] = status
+        except (HTTPException, OSError, ValueError, asyncio.TimeoutError):
+            pass  # Missing observation is never failure or success evidence.
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
 @router.post("/api/extensions/github/requests/proposal")
 async def extension_github_request_proposal(request: Request, api_key: str = Depends(verify_api_key)):
     from extension_requests import read_request, bind_proposal

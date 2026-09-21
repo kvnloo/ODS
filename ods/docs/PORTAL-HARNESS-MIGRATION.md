@@ -80,3 +80,10 @@ are useful but do not prove a local installation on every OS/GPU combination.
 - The autonomous preparation workspace, direct managed lifecycle tools, skill
   migration and full real-installation acceptance matrix remain outstanding.
 - The existing local 4B failure has not been turned into a verified installation.
+- Added `pixel_ods_extension_request_status`: a session-bound read of the saved
+  request, verified prepared package and catalog runtime observation through
+  the existing Unix manager channel. It performs no lifecycle mutations and
+  exposes no credentials or raw application configuration. Unavailable runtime
+  observations remain `not_observed`; proposals never imply readiness. API,
+  plugin and WSL manager regression checks pass. Live deployment and real model
+  use of this new tool remain to be verified.
