@@ -64,6 +64,19 @@ test('CLI verification does not invent a server, port or background process', ()
   assert.throws(() => compileSourceRecipe({...source, port: 0, healthPath: '', cliOnly: true}));
 });
 
+test('Python library verification imports actual modules outside the source checkout', () => {
+  const {dockerfile, healthPath, healthcheck, ...library} = source;
+  const profile = {...library, port:0, cliOnly:true, pythonVersion:'3.12', pythonImports:['actual_package','actual_package.api']};
+  const recipe = compileSourceRecipe(profile);
+  const service = recipe.compose.services['example-project'];
+  assert.deepEqual(service.command, ['python','-c','import importlib; [importlib.import_module(name) for name in ["actual_package","actual_package.api"]]']);
+  assert.match(service.build.dockerfile_inline, /pip check\nWORKDIR \/opt\/ods\n$/);
+  for (const change of [{pythonImports:[]}, {pythonImports:['x; print(1)']}, {pythonImports:['../secret']},
+    {pythonImports:['x\"']}, {command:['invented-cli']}, {cliOnly:false}, {pythonVersion:undefined}]) {
+    assert.throws(() => compileSourceRecipe({...profile,...change}));
+  }
+});
+
 test('invalid identities, ambiguous Dockerfiles and unsupported host fields are rejected', () => {
   for (const change of [{commit: 'main'}, {repository: 'http://localhost/repo'}, {serviceId: '../host'},
     {dockerfileInline: 'FROM alpine'}, {dockerfile: ''}, {port: '8080'}, {healthPath: ''},

@@ -6,8 +6,9 @@ export const sourceRecipeSchema = {
   required: ['repository', 'commit', 'serviceId', 'name', 'port'],
   allOf: [
     {if: {required: ['cliOnly'], properties: {cliOnly: {const: true}}},
-      then: {required: ['command']}, else: {required: ['healthPath', 'healthcheck']}},
-    {if: {required: ['pythonVersion']}, then: {required: ['command']}},
+      then: {anyOf: [{required: ['command']}, {required: ['pythonVersion', 'pythonImports']}]},
+      else: {required: ['healthPath', 'healthcheck']}},
+    {if: {required: ['pythonVersion']}, then: {anyOf: [{required: ['command']}, {required: ['pythonImports']}] }},
   ],
   properties: {
     repository: {type: 'string'}, commit: {type: 'string', pattern: '^[a-f0-9]{40}$'},
@@ -15,11 +16,12 @@ export const sourceRecipeSchema = {
     name: {type: 'string'},
     dockerfile: {type: 'string', description: 'Observed repository-relative Dockerfile path. Use this OR dockerfileInline.'},
     dockerfileInline: {type: 'string', description: 'Complete project-specific Dockerfile if upstream has none. COPY the checked-out source and install that source, not a same-named registry package. Research dependencies and the actual entrypoint first. Shell dollars are escaped by ODS.'},
-    pythonVersion: {type: 'string', pattern: '^3\\.(10|11|12|13|14)$', description: 'Alternative to dockerfile/dockerfileInline ONLY for an inspected installable Python project (pyproject.toml or setup.py). Choose a version supported by its metadata. ODS copies and pip-installs the entire pinned source and runs pip check. Supply the real application command separately. Projects needing extra OS packages or custom build steps must use a researched Dockerfile instead.'},
+    pythonVersion: {type: 'string', pattern: '^3\\.(10|11|12|13|14)$', description: 'Alternative to dockerfile/dockerfileInline ONLY for an inspected installable Python project (pyproject.toml or setup.py). Choose a version supported by its metadata. ODS copies and pip-installs the entire pinned source and runs pip check. Supply the real application command, or pythonImports for a library. Projects needing extra OS packages or custom build steps must use a researched Dockerfile instead.'},
+    pythonImports: {type: 'array', minItems: 1, maxItems: 16, items: {type: 'string', pattern: '^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$'}, description: 'For a Python LIBRARY only: actual import module names observed in its source or documented usage, e.g. ["actual_package"]. Requires pythonVersion and cliOnly=true. Use instead of command; ODS imports these modules in the built image and checks the exit status. Do not assume the distribution name is also a CLI executable or an import name.'},
     port: {type: 'integer', minimum: 0, maximum: 65535, description: 'Actual HTTP application port, or 0 for a CLI-only image.'},
     healthPath: {type: 'string', description: 'Required for a web service: actual HTTP health path. Omit for a CLI-only image.'},
     healthcheck: {type: 'array', minItems: 2, items: {type: 'string'}, description: 'Required for a web service: real Docker healthcheck starting with CMD or CMD-SHELL. For cliOnly, omit; ODS verifies the command exit instead.'},
-    command: {type: 'array', minItems: 1, items: {type: 'string', minLength: 1}, description: 'REQUIRED when cliOnly=true: the real verification executable and arguments, for example an upstream self-test. Dockerfile CMD does not replace this field. For web services only, omit to retain the Dockerfile CMD.'},
+    command: {type: 'array', minItems: 1, items: {type: 'string', minLength: 1}, description: 'For cliOnly=true, supply this OR pythonVersion plus pythonImports: the real verification executable and arguments, for example an upstream self-test. Dockerfile CMD does not replace this field. For web services only, omit to retain the Dockerfile CMD.'},
     cliOnly: {type: 'boolean', description: 'Only for an upstream CLI/library without a server: command must run a real successful application verification and exit. No web endpoint will be advertised.'},
   },
 };
@@ -29,7 +31,18 @@ export function compileSourceRecipe(source) {
       || Object.keys(source).some(key => !Object.hasOwn(sourceRecipeSchema.properties, key))) throw Error('Use only the documented source fields.');
   const missing = sourceRecipeSchema.required.filter(key => !Object.hasOwn(source, key));
   if (missing.length) throw Error('Missing source fields: ' + missing.join(', ') + '. Read this tool schema. A CLI-only image needs cliOnly=true, port=0 and a real verification command.');
-  const {repository, commit, serviceId, name, port, healthPath = '', healthcheck, command, cliOnly = false} = source;
+  const {repository, commit, serviceId, name, port, healthPath = '', healthcheck, cliOnly = false} = source;
+  let command = source.command;
+  if (source.pythonImports !== undefined) {
+    const modules = source.pythonImports;
+    if (cliOnly !== true || source.pythonVersion === undefined || command !== undefined
+        || !Array.isArray(modules) || modules.length < 1 || modules.length > 16
+        || modules.some(name => typeof name !== 'string' || name.length > 128
+          || !/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(name))) {
+      throw Error('pythonImports requires pythonVersion, cliOnly=true and observed Python module names. Supply pythonImports OR command, not both.');
+    }
+    command = ['python', '-c', `import importlib; [importlib.import_module(name) for name in ${JSON.stringify(modules)}]`];
+  }
   if (typeof repository !== 'string' || !/^https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}\/?$/.test(repository)
       || typeof commit !== 'string' || !/^[a-f0-9]{40}$/.test(commit)
       || typeof serviceId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(serviceId)
@@ -41,10 +54,12 @@ export function compileSourceRecipe(source) {
   const strings = value => Array.isArray(value) && value.length > 0 && value.length <= 32
     && value.every(item => typeof item === 'string' && item.length > 0 && item.length <= 4096 && !item.includes('\0'));
   if (cliOnly && command === undefined) {
-    throw Error('source.command is required for cliOnly=true. Supply the researched verification command as an argument array in source.command. Dockerfile CMD alone does not supply this field. Keep the remaining source fields and correct this omission.');
+    throw Error('cliOnly=true requires source.command with the real verification executable/arguments, or pythonVersion plus pythonImports for an inspected Python library. Dockerfile CMD alone does not supply this field. Keep the remaining source fields and correct this omission.');
   }
   if ((!cliOnly || healthcheck !== undefined) && (!strings(healthcheck) || healthcheck.length < 2 || !['CMD', 'CMD-SHELL'].includes(healthcheck[0]))) {
-    throw Error('A web service needs a real healthcheck argument array starting with CMD or CMD-SHELL.');
+    throw Error(cliOnly
+      ? 'Remove source.healthcheck for cliOnly=true. ODS verifies the exit of source.command or imports pythonImports; a CLI-only extension has no web health endpoint.'
+      : 'source.healthcheck must be an argument array starting with CMD or CMD-SHELL, not a Compose object. A web service needs its actual health probe.');
   }
   if (command !== undefined && !strings(command)) throw Error('Supply the actual command as a nonempty argument array.');
   if (cliOnly ? (port !== 0 || healthPath !== '' || !command) : (port === 0 || !healthPath)) {
@@ -73,6 +88,8 @@ export function compileSourceRecipe(source) {
     'WORKDIR /opt/ods/source',
     'COPY . .',
     'RUN python -m pip install --no-cache-dir . && python -m pip check',
+    // Do not let the checkout shadow the installed package during verification.
+    'WORKDIR /opt/ods',
     '',
   ].join('\n') : source.dockerfileInline;
   const portVariable = serviceId.replace(/-/g, '_').toUpperCase() + '_PORT';
