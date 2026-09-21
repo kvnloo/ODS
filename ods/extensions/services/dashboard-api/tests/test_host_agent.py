@@ -8569,3 +8569,103 @@ class TestObservabilityWire:
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+@pytest.fixture
+def install_operation_host(tmp_path, monkeypatch):
+    monkeypatch.setattr(_mod, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(_mod, 'check_auth', lambda handler: True)
+    monkeypatch.setattr(_mod, 'validate_service_id', lambda handler, body: body['service_id'])
+    monkeypatch.setattr(_mod, 'resolve_compose_flags', lambda: [])
+    monkeypatch.setattr(_mod, '_find_ext_dir', lambda service: None)
+    responses, launches = [], []
+    monkeypatch.setattr(_mod, 'json_response', lambda handler, status, body: responses.append((status, body)))
+    class Worker:
+        def __init__(self, target, **kwargs): self.target = target
+        def start(self):
+            launches.append(True)
+            self.target()
+    monkeypatch.setattr(_mod.threading, 'Thread', Worker)
+    def invoke(operation_id, setup=False):
+        monkeypatch.setattr(_mod, 'read_json_body', lambda handler: {
+            'service_id': 'operation-test', 'operation_id': operation_id, 'run_setup_hook': setup})
+        _mod.AgentHandler._handle_install(object())
+    return invoke, responses, launches
+
+
+def test_install_operation_replay_observes_exact_failed_attempt(install_operation_host):
+    invoke, responses, launches = install_operation_host
+    operation_id = 'a' * 32
+    invoke(operation_id)
+    assert responses[-1][0] == 202
+    assert responses[-1][1]['operation_id'] == operation_id
+    record = _mod._read_install_operation('operation-test', operation_id)
+    assert record['state'] == 'failed'
+    invoke(operation_id)
+    assert responses[-1][1]['operation']['state'] == 'failed'
+    assert len(launches) == 1
+    invoke(operation_id, setup=True)
+    assert responses[-1][0] == 409
+    assert len(launches) == 1
+    invoke('b' * 32)
+    assert len(launches) == 2  # New attempt only after a terminal observation.
+
+
+def test_orphaned_install_is_uncertain_and_blocks_new_attempt(install_operation_host):
+    invoke, responses, launches = install_operation_host
+    _mod._save_install_operation({'service_id': 'operation-test', 'operation_id': 'c' * 32,
+        'run_setup_hook': False, 'state': 'running'})
+    invoke('c' * 32)
+    assert responses[-1][1]['operation']['state'] == 'uncertain'
+    invoke('d' * 32)
+    assert responses[-1][0] == 409
+    assert not launches
+
+
+def test_install_disconnect_does_not_replay_or_release_worker_twice(install_operation_host, monkeypatch):
+    invoke, responses, launches = install_operation_host
+    responder = _mod.json_response
+    monkeypatch.setattr(_mod, 'json_response', lambda *args: (_ for _ in ()).throw(BrokenPipeError()))
+    with pytest.raises(BrokenPipeError): invoke('e' * 32)
+    assert _mod._read_install_operation('operation-test', 'e' * 32)['state'] == 'failed'
+    monkeypatch.setattr(_mod, 'json_response', responder)
+    invoke('e' * 32)
+    assert len(launches) == 1
+
+
+def test_install_timeout_does_not_authorize_replay(install_operation_host, monkeypatch):
+    invoke, responses, launches = install_operation_host
+    def timeout(): raise subprocess.TimeoutExpired(['docker'], 1)
+    monkeypatch.setattr(_mod, 'resolve_compose_flags', timeout)
+    invoke('f' * 32)
+    assert _mod._read_install_operation('operation-test', 'f' * 32)['state'] == 'uncertain'
+    invoke('a' * 32)
+    assert responses[-1][0] == 409
+    assert len(launches) == 1
+
+
+def test_install_operation_http_observation_is_authenticated_and_bound(tmp_path, monkeypatch):
+    import urllib.error
+    import urllib.request
+    from http.server import HTTPServer
+    monkeypatch.setattr(_mod, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(_mod, 'AGENT_API_KEY', 'operation-test-key')
+    _mod._save_install_operation({'service_id': 'wire-demo', 'operation_id': 'a' * 32,
+        'run_setup_hook': False, 'state': 'succeeded', 'exit_verified': True})
+    server = HTTPServer(('127.0.0.1', 0), _mod.AgentHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f'http://127.0.0.1:{server.server_port}/v1/extension/operation?service_id=wire-demo&operation_id=' + 'a' * 32
+    try:
+        with pytest.raises(urllib.error.HTTPError) as denied:
+            urllib.request.urlopen(url, timeout=2)
+        assert denied.value.code == 401
+        headers = {'Authorization': 'Bearer operation-test-key'}
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=2) as response:
+            assert json.load(response)['operation']['state'] == 'succeeded'
+        with pytest.raises(urllib.error.HTTPError) as missing:
+            urllib.request.urlopen(urllib.request.Request(url.replace('wire-demo', 'other-demo'), headers=headers), timeout=2)
+        assert missing.value.code == 404
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

@@ -124,3 +124,18 @@ are useful but do not prove a local installation on every OS/GPU combination.
   extension. Failed-operation reconciliation and model-driven verification
   remain outstanding. The host-agent patch is also in the local installation
   and retained deployment source; macOS/Linux execution was not tested here.
+
+- Host installation attempts now have persistent operation identities. The
+  authenticated install endpoint accepts an idempotency ID (or generates one
+  for legacy callers), saves it before execution, and returns the same attempt
+  on replay. A separate authenticated observation endpoint reads that exact
+  service/operation pair. Progress carries the operation ID. Orphaned workers
+  and Docker timeouts remain uncertain and block new host attempts; they are
+  not inferred to have failed. A disconnected HTTP observer no longer prevents
+  the accepted worker from starting or releases its lock twice. Host regression
+  coverage includes replay, conflicting input, restart uncertainty, timeout,
+  disconnected observer and actual authenticated HTTP observation. The host
+  suite passed 367 tests (4 skipped) before the final progress-identity addition;
+  six focused checks then passed. The dashboard coordinator and model tools
+  still need to persist/query these IDs and expose an explicit reconciled
+  retry. This change alone does not complete managed repair or the Laya case.

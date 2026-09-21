@@ -6393,6 +6393,70 @@ def _iso_now() -> str:
 
 
 _BEARER_RE = re.compile(r"Bearer\s+[A-Za-z0-9._\-=+/]+", re.IGNORECASE)
+_install_operation_context = threading.local()
+_install_operation_guard = threading.Lock()
+_install_operation_live = set()
+
+
+def _install_operation_path(service_id, operation_id):
+    if (not isinstance(service_id, str) or not SERVICE_ID_RE.fullmatch(service_id)
+            or not isinstance(operation_id, str) or not re.fullmatch(r'[a-f0-9]{32}', operation_id)):
+        raise ValueError('Invalid installation operation identity')
+    directory = DATA_DIR / 'extension-operations' / service_id
+    if directory.parent.is_symlink() or directory.is_symlink():
+        raise ValueError('Invalid installation operation directory')
+    path = directory / (operation_id + '.json')
+    if path.is_symlink():
+        raise ValueError('Invalid installation operation record')
+    return path
+
+
+def _read_install_operation(service_id, operation_id):
+    path = _install_operation_path(service_id, operation_id)
+    if not path.exists():
+        return None
+    if path.stat().st_size > 16384:
+        raise ValueError('Invalid installation operation size')
+    value = json.loads(path.read_text(encoding='utf-8'))
+    if (not isinstance(value, dict) or value.get('service_id') != service_id
+            or value.get('operation_id') != operation_id
+            or value.get('state') not in {'accepted', 'running', 'succeeded', 'failed', 'uncertain'}
+            or type(value.get('run_setup_hook')) is not bool):
+        raise ValueError('Invalid installation operation record')
+    # A missing worker is not proof that external Docker effects stopped.
+    with _install_operation_guard:
+        live = (service_id, operation_id) in _install_operation_live
+    if value['state'] in {'accepted', 'running'} and not live:
+        value = {**value, 'state': 'uncertain'}
+    return value
+
+
+def _save_install_operation(value):
+    path = _install_operation_path(value['service_id'], value['operation_id'])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix='.operation-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            json.dump(value, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _record_install_operation_progress(service_id, status, phase_label, exit_verified):
+    value = getattr(_install_operation_context, 'value', None)
+    if value is None or value['service_id'] != service_id:
+        return
+    # Raw command output/configuration is deliberately absent from this receipt.
+    value = {**value, 'state': ('uncertain' if value.get('state') == 'uncertain' else
+             {'started': 'succeeded', 'error': 'failed'}.get(status, 'running')),
+             'phase': status, 'updated_at': _iso_now(),
+             'exit_verified': bool(status == 'started' and exit_verified)}
+    _save_install_operation(value)
+    _install_operation_context.value = value
 
 
 def _write_progress(service_id: str, status: str, phase_label: str = "",
@@ -6405,10 +6469,13 @@ def _write_progress(service_id: str, status: str, phase_label: str = "",
 
     # Preserve started_at from existing file
     started_at = _iso_now()
+    operation = getattr(_install_operation_context, 'value', None)
+    operation_id = operation.get('operation_id') if operation and operation['service_id'] == service_id else None
     if progress_file.exists():
         try:
             existing = json.loads(progress_file.read_text(encoding="utf-8"))
-            started_at = existing.get("started_at", started_at)
+            if not operation_id or existing.get('operation_id') == operation_id:
+                started_at = existing.get("started_at", started_at)
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -6421,6 +6488,7 @@ def _write_progress(service_id: str, status: str, phase_label: str = "",
         "error": sanitized_error,
         "started_at": started_at,
         "updated_at": _iso_now(),
+        **({'operation_id': operation_id} if operation_id else {}),
         **({'exit_verified': True} if status == 'started' and exit_verified else {}),
     }
     tmp_file.write_text(json.dumps(data), encoding="utf-8")
@@ -6430,6 +6498,7 @@ def _write_progress(service_id: str, status: str, phase_label: str = "",
     for attempt in range(6):
         try:
             os.replace(str(tmp_file), str(progress_file))
+            _record_install_operation_progress(service_id, status, phase_label, exit_verified)
             return
         except PermissionError as exc:
             last_error = exc
@@ -7346,6 +7415,18 @@ class AgentHandler(BaseHTTPRequestHandler):
         path = parsed.path
         if path == "/health":
             json_response(self, 200, {"status": "ok", "version": VERSION})
+        elif path == '/v1/extension/operation':
+            if not check_auth(self):
+                return
+            query = parse_qs(parsed.query)
+            try:
+                value = _read_install_operation(query.get('service_id', [''])[0],
+                                                query.get('operation_id', [''])[0])
+            except (ValueError, OSError):
+                json_response(self, 409, {'error': 'Installation operation requires inspection'})
+                return
+            json_response(self, 200 if value is not None else 404,
+                          {'operation': value} if value is not None else {'error': 'Operation not found'})
         elif path == "/v1/gpu/metrics":
             self._handle_gpu_metrics()
         elif path == "/v1/llm/status":
@@ -10033,13 +10114,60 @@ class AgentHandler(BaseHTTPRequestHandler):
         if service_id is None:
             return
         run_setup_hook = body.get("run_setup_hook", False)
+        operation_id = body.get('operation_id', secrets.token_hex(16))
+        if type(run_setup_hook) is not bool:
+            json_response(self, 400, {'error': 'run_setup_hook must be boolean'})
+            return
+        try:
+            previous = _read_install_operation(service_id, operation_id)
+        except (ValueError, OSError):
+            json_response(self, 409, {'error': 'Installation operation requires inspection'})
+            return
+        if previous is not None:
+            if previous['run_setup_hook'] != run_setup_hook:
+                json_response(self, 409, {'error': 'Installation operation identity conflict'})
+                return
+            json_response(self, 200, {'status': 'observed', 'operation': previous})
+            return
 
         lock = _service_locks[service_id]
         if not lock.acquire(blocking=False):
             json_response(self, 409, {"error": f"Operation in progress for {service_id}"})
             return
 
+        # Persist before acknowledging or causing effects. Recheck under the
+        # service lock because another request may have finished meanwhile.
+        try:
+            previous = _read_install_operation(service_id, operation_id)
+            if previous is not None:
+                lock.release()
+                if previous['run_setup_hook'] != run_setup_hook:
+                    json_response(self, 409, {'error': 'Installation operation identity conflict'})
+                else:
+                    json_response(self, 200, {'status': 'observed', 'operation': previous})
+                return
+            directory = _install_operation_path(service_id, operation_id).parent
+            for saved in directory.glob('*.json'):
+                older = _read_install_operation(service_id, saved.stem)
+                if older and older['state'] not in {'succeeded', 'failed'}:
+                    lock.release()
+                    json_response(self, 409, {'error': 'Previous installation requires reconciliation',
+                                             'operation_id': saved.stem})
+                    return
+            operation = {'schema_version': 1, 'service_id': service_id,
+                         'operation_id': operation_id, 'run_setup_hook': run_setup_hook,
+                         'state': 'accepted', 'phase': 'queued', 'updated_at': _iso_now(),
+                         'exit_verified': False}
+            _save_install_operation(operation)
+            with _install_operation_guard:
+                _install_operation_live.add((service_id, operation_id))
+        except (ValueError, OSError):
+            lock.release()
+            json_response(self, 409, {'error': 'Could not persist installation operation'})
+            return
+
         def _run_install():
+            _install_operation_context.value = operation
             try:
                 flags = resolve_compose_flags()
 
@@ -10196,6 +10324,9 @@ class AgentHandler(BaseHTTPRequestHandler):
                     )
 
             except subprocess.TimeoutExpired:
+                # Docker can continue daemon-side after its CLI times out.
+                _install_operation_context.value = {**_install_operation_context.value,
+                                                     'state': 'uncertain'}
                 _write_progress(service_id, "error", "Installation failed",
                                 error=f"timed out ({SUBPROCESS_TIMEOUT_START}s)")
             except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
@@ -10203,14 +10334,21 @@ class AgentHandler(BaseHTTPRequestHandler):
                 _write_progress(service_id, "error", "Installation failed",
                                 error=str(exc)[:500])
             finally:
+                _install_operation_context.value = None
+                with _install_operation_guard:
+                    _install_operation_live.discard((service_id, operation_id))
                 lock.release()
 
         try:
-            json_response(self, 202, {"status": "accepted", "service_id": service_id, "action": "install"})
             threading.Thread(target=_run_install, daemon=True).start()
         except Exception:
+            with _install_operation_guard:
+                _install_operation_live.discard((service_id, operation_id))
             lock.release()
             raise
+        # A disconnected observer must not cancel or replay an accepted worker.
+        json_response(self, 202, {"status": "accepted", "service_id": service_id,
+                                 "action": "install", 'operation_id': operation_id})
 
 
     # ── Model management handlers ──
