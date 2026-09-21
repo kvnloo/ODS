@@ -152,3 +152,37 @@ are useful but do not prove a local installation on every OS/GPU combination.
   and twenty UI tests passed. The broader extensions suite is still running.
   This coordinator/host protocol has not yet been deployed together locally.
   Explicit reconciled retry and model-facing lifecycle tools remain pending.
+
+## Local 4B probes, 2026-09-21
+
+- The broader coordinator/extensions suite completed: 295 passed. The host
+  attempt protocol and coordinator were deployed together locally. After
+  inspecting the previous terminal build failure and confirming no container
+  existed, an explicit retry through the normal install endpoint completed for
+  ItsDangerous. Operation `8239608228b0cbbd7fe0c8ee50c5bf89` is `succeeded`,
+  `exit_verified=true`; the container exited zero and the catalog reports
+  `cli_installed`. This was an operator-driven integration check, not an
+  autonomous model installation. The public install endpoint still uses legacy
+  premature "installed" wording when only startup is accepted; that remains to
+  be corrected without breaking existing callers.
+- Restored the selected 4B with Vulkan and context 32768. Its native Lemonade
+  process was absent. The old scheduled task specifies 65536 and was not used.
+  The edge container also had an empty ingress mount after WSL restart. A
+  local shared WSL bind and retained Compose override restored the socket.
+  This is development recovery, not a persistent cross-platform lifecycle fix.
+- Actual Portal chat probe `harness-4b-1087202ad8d1` against `pallets/click`
+  exposed missing tool allowances: plugin registration existed, but installer
+  generated lists omitted the Python proposal, request status and preparation
+  tools. The model received unknown-tool errors and falsely claimed a saved
+  proposal. Installer/onboarding/runtime-budget lists and local allowances are
+  now corrected; targeted POSIX tests passed (32 tests, 19 subtests). Native
+  Windows execution of these POSIX provisioning scripts is unsupported and
+  failed at `os.getuid`; their WSL execution was used for this verification.
+- A second real 4B probe, `harness-4b-1a3d7f06aae5`, discovered the tools,
+  recovered from a wrong routing identity, saved a bound proposal and read its
+  status. The turn nevertheless hit context overflow and ended with a generic
+  failure. The proposal also uses class names as Python imports, so it must
+  not be promoted as verified. Draft `1b326ae67b4bd889dbffa22ee42183e9ac3d955d633614afcf964c8e5d97394b`
+  is accepted, not installed. Next work must address isolated validation/repair,
+  context recovery, truthful completion evidence and simpler session-bound
+  tool identity instead of treating this partial success as completion.

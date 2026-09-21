@@ -58,6 +58,10 @@ def test_shared_overlay_is_staged_idempotent_and_uses_selected_home(tmp_path, co
     assert 'pixel_ods_extension_proposal' in value['tools']['alsoAllow']
     assert 'pixel_ods_extension_proposal' in value['tools']['sandbox']['tools']['allow']
     assert 'pixel_ods_extension_proposal' not in agent['tools']['deny']
+    for tool in ('pixel_ods_python_library_proposal', 'pixel_ods_extension_request_status', 'pixel_ods_extension_request_prepare'):
+        assert tool in value['tools']['alsoAllow']
+        assert tool in value['tools']['sandbox']['tools']['allow']
+        assert tool not in agent['tools']['deny']
     assert value['plugins']['entries']['pixel-ods']['config']['perplexicaPort'] == 3099
     repeated = invoke(staged, owner_home, openclaw_home)
     assert repeated.returncode == 0, repeated.stderr
