@@ -6494,7 +6494,7 @@ export function createToolLoopGuard({
     // even if the package command happens to succeed. Keep research and owner
     // clarification available without permitting a second installation path.
     if (state?.githubExtensionRequest && ![
-      'tool_search', 'tool_describe', 'pixel_ods_extension_proposal',
+      'tool_search', 'tool_describe', 'pixel_ods_extension_proposal', 'pixel_ods_python_library_proposal',
       'pixel_ods_web_extract', 'pixel_ods_research', 'web_search', 'web_fetch',
       'read', 'pixel_ods_ask_user', 'pixel_ods_goal', 'pixel_ods_activity',
       'pixel_ods_history', 'session_status', 'memory_search', 'memory_get',

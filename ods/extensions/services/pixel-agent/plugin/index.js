@@ -64,7 +64,7 @@ import { createAccessRuntime, executionHostForAgent } from "./access-runtime.mjs
 import { createManagedRuntimeRegistry } from "./managed-runtime-lifecycle.mjs";
 import {createContextCompaction, readContextRequest, prepareStableContextModel} from './context-compaction.mjs';
 import {registerHistoryIntegration} from './history-context.mjs';
-import {createExtensionProposalTool} from './extension-proposal.mjs';
+import {createExtensionProposalTool, createPythonLibraryProposalTool} from './extension-proposal.mjs';
 import { createOpenClawCodingTools, resolveSandboxContext, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness";
 
 const AGENT_ID = process.env.PIXEL_AGENT_ID ?? "pixel";
@@ -553,6 +553,7 @@ export default definePluginEntry({
     registerTool(api, createGoalProgressTool(), {names:['pixel_ods_goal']});
     registerTool(api, createActivityTool(), {names:['pixel_ods_activity']});
     api.registerTool(context => createExtensionProposalTool(context), {names:['pixel_ods_extension_proposal']});
+    api.registerTool(context => createPythonLibraryProposalTool(context), {names:['pixel_ods_python_library_proposal']});
 
     registerTool(api, createDownloadPromoteTool(), {
       names: ["pixel_ods_download_promote"],

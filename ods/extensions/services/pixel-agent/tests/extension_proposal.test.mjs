@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';
-import {createExtensionProposalTool, submitExtensionProposal} from '../plugin/extension-proposal.mjs';
+import {createExtensionProposalTool, createPythonLibraryProposalTool, submitExtensionProposal} from '../plugin/extension-proposal.mjs';
 
 const context = {agentId: 'pixel', sessionKey: 'agent:pixel:openai-user:ods-' + createHash('sha256').update('chat').digest('hex')};
 const args = {chatId: 'chat', requestId: 'turn', candidate: {repository: 'https://github.com/o/r',
@@ -22,6 +22,24 @@ test('only Portal sessions can submit proposals for their own conversation', asy
   assert.equal(result.isError, undefined);
   assert.equal(JSON.parse(result.content[0].text).state, 'draft');
   assert.equal(calls, 1);
+});
+
+test('flat Python library proposals keep identical owner binding and immutable source checks', async () => {
+  let submitted;
+  const tool = createPythonLibraryProposalTool(context, {submit:async value => {submitted=value; return receipt;}});
+  const input = {chatId:'chat',requestId:'turn',repository:'https://github.com/o/r',commit:'a'.repeat(40),
+    serviceId:'example',name:'Example',pythonVersion:'3.12',pythonImports:['actual_package']};
+  assert.equal(createPythonLibraryProposalTool({...context,agentId:'other'}),null);
+  assert.equal((await tool.execute('one',{...input,command:['invented']})).isError,true);
+  assert.equal((await tool.execute('one',{...input,chatId:'other'})).isError,true);
+  assert.equal(submitted,undefined);
+  assert.equal((await tool.execute('one',input)).isError,undefined);
+  assert.equal(submitted.action,'github-request-propose');
+  assert.equal(submitted.candidate.compose.services.example.build.context,'https://github.com/o/r.git#'+'a'.repeat(40));
+  assert.equal(submitted.candidate.manifest.service.startup_check,false);
+  assert.match(submitted.candidate.compose.services.example.command[2], /importlib.import_module/);
+  assert.equal(tool.parameters.properties.command,undefined);
+  assert.equal(tool.parameters.properties.source,undefined);
 });
 
 test('rejects large proposals and ambiguous or changed receipts without echoing errors', async () => {

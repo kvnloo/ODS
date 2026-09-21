@@ -10,6 +10,34 @@ const managerSocket = platform => platform === 'darwin'
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).sort().join() === [...keys].sort().join();
 
+// A library has neither a server port nor a CLI entrypoint by default. Give
+// small models one flat, non-ambiguous contract while sharing the same scoped
+// proposal transport, source compiler and backend verification as every recipe.
+export function createPythonLibraryProposalTool(context, dependencies = {}) {
+  const proposal = createExtensionProposalTool(context, dependencies);
+  if (!proposal) return null;
+  const fields = ['chatId', 'requestId', 'repository', 'commit', 'serviceId', 'name', 'pythonVersion', 'pythonImports'];
+  const parameters = {type:'object', additionalProperties:false, required:fields,
+    properties:Object.fromEntries(fields.map(key => [key,
+      key === 'chatId' || key === 'requestId' ? proposal.parameters.properties[key] : sourceRecipeSchema.properties[key]]))};
+  parameters.properties.pythonVersion = {...parameters.properties.pythonVersion,
+    description:'Python 3 minor version supported by the inspected project metadata, for example 3.12.'};
+  parameters.properties.pythonImports = {...parameters.properties.pythonImports,
+    description:'Actual Python module names used in upstream import statements, e.g. ["actual_package"]. ODS verifies that these modules import successfully after installing the pinned source.'};
+  return {
+    name:'pixel_ods_python_library_proposal', label:'Propose Python library installation',
+    description:'For a researched installable Python LIBRARY from the current /extensions GitHub request. Supply these eight flat fields only. Use its verified commit, supported Python version and actual import module names from upstream documentation/source. ODS installs the whole pinned checkout, checks dependencies and verifies imports outside the source directory. No Dockerfile, command, server port, healthcheck or questions. Saves a request-bound draft through the normal ODS validator; it does not report installation success. For custom system dependencies or a web/CLI application use pixel_ods_extension_proposal instead.',
+    parameters,
+    async execute(id, args) {
+      if (!exact(args,fields)) return {isError:true,content:[{type:'text',text:JSON.stringify({
+        error:'Supply exactly the eight documented flat fields for a Python library.', parameters, proposalSubmitted:false,
+      })}]};
+      const {chatId, requestId, ...source} = args;
+      return proposal.execute(id,{chatId,requestId,source:{...source,port:0,cliOnly:true}});
+    },
+  };
+}
+
 // This channel can only bind a proposal to an existing owner request. It has
 // no lifecycle operation, arbitrary URL, shell command or credential parameter.
 export function submitExtensionProposal(payload, {connect = net.createConnection, platform = process.platform} = {}) {
