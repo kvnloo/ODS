@@ -540,6 +540,28 @@ class TestInstallExtension:
         assert (tmp_path / "user" / "my-ext" / "compose.yaml").is_file()
         assert ext_mod._read_progress("my-ext")["status"] == "error"
 
+    def test_retry_preserves_existing_host_configuration(self, test_client, monkeypatch, tmp_path):
+        from routers import extensions as ext_mod
+        lib_dir = _setup_library_ext(tmp_path, "my-ext")
+        _patch_mutation_config(monkeypatch, tmp_path, lib_dir=lib_dir)
+        modes = []
+        def sync(sid, *, preserve_existing=False):
+            modes.append((sid, preserve_existing))
+            return len(modes) > 1
+        monkeypatch.setattr(ext_mod, "_call_agent_sync_config", sync)
+        installs = []
+        def install(sid):
+            installs.append(sid)
+            return True
+        monkeypatch.setattr(ext_mod, "_call_agent_install", install)
+        first = test_client.post("/api/extensions/my-ext/install", headers=test_client.auth_headers)
+        assert first.status_code == 502
+        assert installs == []
+        second = test_client.post("/api/extensions/my-ext/install", headers=test_client.auth_headers)
+        assert second.status_code == 200
+        assert modes == [("my-ext", True), ("my-ext", True)]
+        assert installs == ["my-ext"]
+
     def test_install_copies_and_enables(self, test_client, monkeypatch, tmp_path):
         """Install copies from library and keeps compose.yaml enabled."""
         lib_dir = _setup_library_ext(tmp_path, "my-ext")
