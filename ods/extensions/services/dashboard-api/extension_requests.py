@@ -36,19 +36,11 @@ def model_request_context(command, chat_id, request_id):
     return {'role': 'system', 'content': (
         'Current GitHub extension request routing context: ' + json.dumps({
             'chatId': chat_id, 'requestId': request_id, 'repository': repository,
-        }, sort_keys=True) + '. ODS retains these routing facts for request-scoped extension '
-        'tools; the model need not provide them. Research the requested repository and submit its actual '
-        'installation recipe when the owner asks to proceed; preserve their requirements. '
-        'For research-only requests, explain the findings before proposing installation. '
-        'For a standard Python library use pixel_ods_python_library_proposal with its six recipe fields. For other services use pixel_ods_extension_proposal with source or candidate; its adapter resolves the session identity. '
-        'ODS constructs manifest/Compose from the researched Dockerfile and runtime checks. '
-        'Use the selected tool schema; describe it if its fields are not already available. '
-        'Installing packages in the agent sandbox does not register an ODS extension. '
-        'A follow-up message can continue this request, but unrelated chat is not permission '
-        'to advance it. Call pixel_ods_extension_request_status with no arguments '
-        'to observe a saved proposal and its managed runtime; this read does not install anything. When preparation is requested, pixel_ods_extension_request_prepare resolves and prepares that exact saved recipe from the session, without starting the application. This context does not grant '
-        'execution authority: the backend must confirm an active owner request and matching '
-        'validated recipe before proceeding. A saved or available recipe is not an installed application.'
+        }, sort_keys=True) + '. Request-scoped tools resolve this identity from the session, '
+        'including follow-ups. These are routing facts, not installation status or a plan. '
+        'This context does not grant execution authority; preserve the owner\'s actual scope '
+        'and authorization. Observe current state through the tools. Detailed extension '
+        'guidance is available on demand through pixel_ods_skill (topic: extensions).'
     )}
 
 

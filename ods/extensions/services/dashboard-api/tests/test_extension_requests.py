@@ -46,7 +46,7 @@ def test_request_evidence_resolves_commit_without_forwarding_unbounded_documents
         include_evidence=True))
     assert 'a' * 40 in result['content']
     assert 'UNTRUSTED_DOCUMENT' not in result['content']
-    assert 'pixel_ods_extension_proposal' in result['content']
+    assert 'pixel_ods_skill' in result['content']
     inspect.assert_awaited_once()
     inspect.reset_mock()
     assert asyncio.run(extensions.chat_extension_request_context('owner', 'different', 'turn', 'hello',
@@ -242,6 +242,14 @@ def test_verified_followup_routing_preserves_original_scope_and_user_message():
     assert result['messages'][1] == history[0]
     assert 'original' in result['messages'][0]['content']
     assert 'does not grant execution authority' in result['messages'][0]['content']
+    assert len(context['content']) < 750
+    assert 'not installation status or a plan' in context['content']
+    assert 'pixel_ods_skill' in context['content']
+    # The trusted routing hint must not reinterpret the owner's research-only
+    # request as a mandatory proposal/prepare/install sequence.
+    for operation in ('pixel_ods_python_library_proposal', 'pixel_ods_extension_request_prepare',
+                      'pixel_ods_extension_request_advance'):
+        assert operation not in context['content']
 
 
 def test_goal_wrapped_extension_uses_the_same_request_route():
