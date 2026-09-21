@@ -104,10 +104,8 @@ export const EDIT_CREATE_LOOP_ABORT_REASON =
   "Pixel stopped this response because it kept retrying edit after the new-file write correction. The workspace is preserved; start a fresh message to retry with write.";
 
 export const REPEATED_WRITE_REQUIRES_PATCH_REASON =
-  "The write content matches what was previously recorded for that path in this turn. Use edit or apply_patch for the smallest relevant correction instead of rewriting the whole file with identical content; the file on disk may have been deleted or changed externally.";
+  "This write repeats content already recorded for this path in the current turn and makes no observed progress. Inspect the file if its state may have changed, or make a materially different correction. Other authorized tools remain available within the run progress budget.";
 
-export const REPEATED_WRITE_RETRY_EXHAUSTED_REASON =
-  "Pixel blocked a second identical-content rewrite of that path after already directing a focused edit. Do not call another tool in this turn; start a fresh message and continue with edit or apply_patch.";
 
 export const FOCUSED_EDIT_REQUIRED_REASON =
   "This edit repeats a large existing file in oldText and newText. Preserve context and make only the smallest unique replacements with edit, or use a focused apply_patch; do not resend the whole file.";
@@ -6264,7 +6262,6 @@ export function createToolLoopGuard({
         successfulWriteContentByPath: new Map(),
         compareSwapRepairCounts: new Map(),
         successfulReadPaths: new Set(),
-        repeatedWriteBlocks: new Map(),
         privateNetworkExhausted: false,
         privateNetworkRequestDenied: false,
         privateNetworkPrompt: false,
@@ -7101,21 +7098,9 @@ export function createToolLoopGuard({
           typeof newContent === "string" &&
           previousContent === newContent
         ) {
-          const blocks =
-            state.repeatedWriteBlocks.get(writePath) ?? 0;
-          state.repeatedWriteBlocks.set(writePath, blocks + 1);
-          if (blocks === 0) {
-            return {
-              block: true,
-              blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON,
-            };
-          }
-          state.codingExhausted = true;
-          state.codingTerminalBlocks = 1;
-          return {
-            block: true,
-            blockReason: REPEATED_WRITE_RETRY_EXHAUSTED_REASON,
-          };
+          // Refuse this no-op, not a subsequent corrective action. Persisted
+          // failed tool results and model rounds feed the shared run budget.
+          return {block: true, blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON};
         }
       }
       if (selectedToolName === "edit" && noOpEdit(selectedParams)) {
@@ -8617,7 +8602,6 @@ export function createToolLoopGuard({
       : undefined;
     if (completedWritePath) {
       state.successfulWritePaths.add(completedWritePath);
-      state.repeatedWriteBlocks.delete(completedWritePath);
       const writtenContent = successfulMutation.event?.params?.content;
       if (
         typeof writtenContent === "string" &&
@@ -8727,7 +8711,6 @@ export function createToolLoopGuard({
         state.successfulWritePaths.has(readPath)
       ) {
         state.successfulWriteContentByPath.delete(readPath);
-        state.repeatedWriteBlocks.delete(readPath);
         state.compareSwapRepairCounts.delete(readPath);
       }
     }

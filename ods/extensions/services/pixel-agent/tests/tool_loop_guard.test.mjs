@@ -1,3 +1,4 @@
+import { RUN_PROGRESS_STOP_REASON } from "../plugin/run-progress-budget.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -72,7 +73,6 @@ import {
   PRIVATE_NETWORK_LOOP_ABORT_REASON,
   RECURSIVE_DELETE_REQUIRES_OWNER_REASON,
   REPEATED_WRITE_REQUIRES_PATCH_REASON,
-  REPEATED_WRITE_RETRY_EXHAUSTED_REASON,
   REQUESTED_PARSED_JSON_REQUIRED_REASON,
   REQUESTED_UNITTEST_FINAL_RETRY_REASON,
   REQUESTED_UNITTEST_REQUIRED_REASON,
@@ -1146,7 +1146,7 @@ test("allows materially different repeated writes while blocking identical no-pr
         params: { id: "write", args: { path: "cache.py", content: "replacement\n" } },
       },
     }),
-    { block: true, blockReason: REPEATED_WRITE_RETRY_EXHAUSTED_REASON }
+    { block: true, blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON }
   );
 });
 
@@ -13478,14 +13478,14 @@ test("identical write no-op protection: without missing-file evidence, identical
     { block: true, blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON }
   );
 
-  // Second identical retry → REPEATED_WRITE_RETRY_EXHAUSTED_REASON
+  // Second identical retry → REPEATED_WRITE_REQUIRES_PATCH_REASON
   assert.deepEqual(
     call(guard, "tool_call", {
       event: {
         params: { id: "write", args: { path: "nop.py", content: "a = 2\n" } },
       },
     }),
-    { block: true, blockReason: REPEATED_WRITE_RETRY_EXHAUSTED_REASON }
+    { block: true, blockReason: REPEATED_WRITE_REQUIRES_PATCH_REASON }
   );
 });
 
@@ -14994,4 +14994,34 @@ test('native rejected calls with session-only persistence exhaust the owning run
   guard.observeModelEnd({}, context);
   assert.deepEqual(attempts, ['native-session']);
   assert.equal(guard.deliveryVerificationForRun(context.runId).status, 'failed');
+});
+
+
+test("repeated writes allow a different repair but remain bounded by actual failed results", () => {
+  for (const repair of [true, false]) {
+    const guard = createToolLoopGuard();
+    const args = {path: "recover.txt", content: "old"};
+    call(guard, "write", {event: {params: args}, context: {toolCallId: "initial"}});
+    afterCall(guard, "write", {event: {params: args, result: {
+      content: [{type: "text", text: "Successfully wrote recover.txt"}],
+    }}, context: {toolCallId: "initial"}});
+    const attempts = repair ? 2 : 4;
+    for (let i = 0; i < attempts; i++) {
+      const id = `repeat-${i}`;
+      const blocked = call(guard, "write", {event: {params: args}, context: {toolCallId: id}});
+      assert.equal(blocked.blockReason, REPEATED_WRITE_REQUIRES_PATCH_REASON);
+      afterCall(guard, "write", {event: {params: args, result: {
+        isError: true, content: [{type: "text", text: blocked.blockReason}],
+      }}, context: {toolCallId: id}});
+    }
+    const different = call(guard, "edit", {event: {params: {
+      path: "recover.txt", oldText: "old", newText: "fixed",
+    }}, context: {toolCallId: "repair"}});
+    if (repair) {
+      assert.notEqual(different?.block, true, "two failed no-ops must not prohibit a changed repair");
+    } else {
+      assert.equal(different.blockReason, RUN_PROGRESS_STOP_REASON,
+        "four consecutive failed results exhaust the shared budget");
+    }
+  }
 });

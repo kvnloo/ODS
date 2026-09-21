@@ -406,3 +406,19 @@ set `codingExhausted`, so it rejected that correction. This is both a model sema
 failure and a concrete recovery-policy issue to fix next: repeated no-op attempts
 should remain bounded without prematurely prohibiting a different corrective action.
 No successful CSV repair or general 4B qualification is claimed.
+
+### Repeated writes do not prohibit a different repair
+
+The live CSV run exposed a local second-write fuse that set `codingExhausted`
+for the whole turn. Removed that fuse and its per-path counter. Identical writes
+remain refused with factual no-progress feedback; a different edit, rewrite or
+inspection is admitted unless an independent boundary or shared progress budget
+blocks it. Failed tool results still consume the existing consecutive/total failure
+budget, and repeated model rounds remain bounded. No CSV-specific repair is injected.
+
+Validated 539 guard tests plus 11 progress-budget/argument-order tests. The new
+regression reproduces two rejected identical writes followed by an admitted changed
+edit, and separately proves four consecutive failed results stop the run. Applied
+the exact plugin patch locally after idle verification and restarted the gateway.
+A natural continuation was submitted to the same 4B chat to test actual recovery;
+this unit evidence alone does not prove that the model will correct the CSV logic.
