@@ -112,7 +112,7 @@ export default function useGithubExtensionRequest(chatId) {
     setState({ command, state: 'researching' })
     const report = value => {
       run.target = value.target
-      if (current.current === run && !run.controller.signal.aborted) setState({ ...value, command })
+      if (current.current === run && !run.controller.signal.aborted) setState({ ...value, command, requestId: run.requestId, chatId: run.chatId })
     }
     const failed = () => {
       if (current.current === run) {

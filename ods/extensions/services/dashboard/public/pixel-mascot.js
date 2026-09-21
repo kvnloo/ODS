@@ -390,7 +390,7 @@
     gradient.append(svg('stop',{offset:0,'stop-color':'#ffffff','stop-opacity':.85}),svg('stop',{offset:.5,'stop-color':'#ffffff','stop-opacity':.12}),svg('stop',{offset:1,'stop-color':'#7394c8','stop-opacity':.38}));
     defs.append(gradient);
     const sheen=svg('path',{d:'M25 75C14 75 8 68 8 59C8 49 15 42 25 41C26 28 36 20 48 22C58 23 64 30 66 38C77 34 88 41 89 51C97 55 97 67 90 72C86 75 81 75 76 75Z',fill:`url(#${gradientId})`});
-    const wind=svg('g',{fill:'none',stroke:'#b9d1ea','stroke-width':2.2,'stroke-linecap':'round',opacity:0});
+    const wind=svg('g',{class:'portal-cloud-wind',fill:'none',stroke:'#b9d1ea','stroke-width':2.2,'stroke-linecap':'round',opacity:0});
     wind.append(svg('path',{d:'M24 83H48M39 89H65M64 82H76'}));
     const sparkles = svg('g', {class:'portal-sparkles',opacity:0, fill:'none',stroke:'#d7e3e8','stroke-width':1.8,'stroke-linecap':'round'});
     [[13,24,3],[85,19,4],[85,65,2.5]].forEach(([x,y,r]) => sparkles.append(svg('path',{d:`M ${x} ${y-r} Q ${x} ${y} ${x+r} ${y} Q ${x} ${y} ${x} ${y+r} Q ${x} ${y} ${x-r} ${y} Q ${x} ${y} ${x} ${y-r} Z`})));

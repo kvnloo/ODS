@@ -868,7 +868,7 @@ def _refresh_projected_credential(source: pathlib.Path, destination: pathlib.Pat
             raise ManagerError('unsafe credential projection directory')
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600, dir_fd=directory)
         with os.fdopen(descriptor, 'wb') as stream:
-            stream.write(('DASHBOARD_API_KEY=' + matches[0] + '\n').encode())
+            stream.write(f'DASHBOARD_API_KEY={matches[0]}\n'.encode())
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, destination.name, src_dir_fd=directory, dst_dir_fd=directory)

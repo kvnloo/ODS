@@ -29,6 +29,7 @@ import PortalExtensionSetup from '../components/PortalExtensionSetup'
 import PortalExtensionProgress from '../components/PortalExtensionProgress'
 import useExtensionInstallation from '../hooks/useExtensionInstallation'
 import useGithubExtensionRequest from '../hooks/useGithubExtensionRequest'
+import useExtensionProjectIntegration from '../hooks/useExtensionProjectIntegration'
 import { conversationProject } from '../lib/conversationProjects'
 import PortalStreamingText from '../components/PortalStreamingText'
 import PortalResponseActions from '../components/PortalResponseActions'
@@ -1003,7 +1004,7 @@ export default function Pixel({ systemStatus = null }) {
         if (!reader) throw new Error('stream unavailable')
         if (!extensionInstallationStarted) {
           extensionInstallationStarted = true
-          startExtensionInstallation(trimmed, controller.signal)
+          startExtensionInstallation(trimmed, controller.signal, { chatId, requestId })
           startGithubExtensionRequest(trimmed, { chatId, requestId }, controller.signal)
         }
 
@@ -1356,6 +1357,15 @@ export default function Pixel({ systemStatus = null }) {
   const inputOver = input.length > MAX_INPUT_LEN
   const inputEmpty = !(command?.task ?? goalDraft?.task ?? input).trim()
   const isDisabled = sending || modelSwitching || restoredActive || restoredChecking || stopping || teams.busy || contextControl.busy || contextControl.historyUnknown || status !== 'available'
+  const integrationCommand = [...messages].reverse().find(message => message.role === 'user')?.content
+  useExtensionProjectIntegration({
+    chatId: chatIdRef.current,
+    installation: githubExtensionInstallation?.command === integrationCommand ? githubExtensionInstallation : extensionInstallation,
+    command: integrationCommand,
+    project: conversationProject({messages, preview})?.path,
+    idle: !isDisabled && !interrupted && !input.trim() && !abortRef.current && messages.at(-1)?.status === 'done',
+    sendMessage,
+  })
   const workingElapsed = formatElapsed(workingElapsedSeconds)
   const statusLabel = contextControl.busy ? (contextControl.phase==='unknown'?'Checking context':'Compacting') : stopping
     ? 'Stopping'
