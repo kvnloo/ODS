@@ -7822,6 +7822,15 @@ export function createToolLoopGuard({
         };
       }
       if (lifecycle?.action === "install-next" && toolName === "pixel_ops_run") {
+        // The owner selected the catalog coordinator. Normalize equivalent
+        // install/start verbs to that coordinator, never to a direct mutation.
+        // The receipt and sequencing checks below still gate every request.
+        if (["ods.extensions.install", "ods.extensions.enable"].includes(params?.action) &&
+            params?.target === "ods-host" && exactKeys(params?.parameters, ["serviceId"]) &&
+            params.parameters.serviceId === lifecycle.serviceId) {
+          params = { ...params, action: "ods.extensions.install-next" };
+          normalizedParams = params;
+        }
         if (!["ods.extensions.inspect", "ods.extensions.install-next"].includes(params?.action) ||
             params?.target !== "ods-host" || !exactKeys(params?.parameters, ["serviceId"]) ||
             params.parameters.serviceId !== lifecycle.serviceId) {

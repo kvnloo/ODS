@@ -15096,12 +15096,18 @@ test("catalog installation advances through matched coordinator receipts without
     target: "ods-host", action: `ods.extensions.${action}`, parameters,
   }}})?.block;
   assert.equal(blocked("install-next"), true);
+  assert.equal(blocked("install"), true);
   const inspect = submit("inspect", "23");
   finish("inspect", inspect, lifecycleResult("inspect", {installationPrerequisites: {
     state: "dependencies_required", steps: rows("not_installed", "not_installed"),
   }}));
-  assert.equal(blocked("install"), true);
-  assert.equal(blocked("enable"), true);
+  for (const action of ["install", "enable"]) {
+    const normalized = call(guard, "pixel_ops_run", {event: {params: {
+      target: "ods-host", action: `ods.extensions.${action}`, parameters,
+    }}});
+    assert.equal(normalized.params.action, "ods.extensions.install-next");
+    assert.deepEqual(normalized.params.parameters, parameters);
+  }
   assert.equal(call(guard, "pixel_ops_run", {event: {params: {target: "ods-host", action: "ods.extensions.install-next",
     parameters: {serviceId: "db"}}}})?.block, true);
   const value = (state, steps, active, effect) => ({schemaVersion: 1, kind: "ods-pixel-extension-installation",

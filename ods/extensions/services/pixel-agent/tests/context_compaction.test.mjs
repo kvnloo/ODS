@@ -187,6 +187,8 @@ test('model-bound measurement survives restart but invalidates same-window alias
   time++;f.runtime.observeModelOutput(event,ctx);assert.equal(f.runtime.context(user).context.used,9300);
   f.entry.updatedAt=time+100;f.entry.totalTokensFresh=false;
   assert.equal(f.runtime.context(user).context.used,9300,'session metadata writes preserve the last measured call');
+  f.entry.totalTokensFresh=true;f.entry.totalTokens=111195;
+  assert.equal(f.runtime.context(user).context.used,9300,'cumulative session tokens are not context occupancy');
   assert.equal(f.runtime.context(user).model.contextWindow,32000,'reported model budget matches the measured effective budget');
   f.entry.compactionCount++;
   assert.equal(f.runtime.context(user).context,null,'a later compaction invalidates the old occupancy');

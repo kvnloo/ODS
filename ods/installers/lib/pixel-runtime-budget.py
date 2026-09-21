@@ -209,6 +209,8 @@ updated_compaction["reserveTokens"] = (
 # The computed reserve already includes output and transport headroom.
 # A redundant half-window floor can reject otherwise usable compacted history.
 updated_compaction["reserveTokensFloor"] = 0
+# Summary generation uses the same bounded local-provider deadline.
+updated_compaction["timeoutSeconds"] = 1800
 # The fixed OpenClaw 20K keep-recent default is larger than every compact ODS
 # profile. Scale it for all contexts so compaction always drops real history
 # instead of writing an empty no-op summary and blocking the recovery retry.

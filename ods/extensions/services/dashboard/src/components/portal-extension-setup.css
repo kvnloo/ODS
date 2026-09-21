@@ -12,3 +12,5 @@
 .portal-extension-progress ul { list-style: none; padding: .4rem 0; max-height: 12rem; overflow: auto; scrollbar-width: thin; }
 .portal-extension-progress li { padding: .2rem 0; }
 .portal-extension-progress button { background: transparent; border: 0; color: inherit; padding: .2rem 0; }
+
+.portal-extension-progress button + button { margin-left: .8rem; }

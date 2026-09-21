@@ -10015,6 +10015,9 @@ class AgentHandler(BaseHTTPRequestHandler):
                     _write_progress(service_id, "error", "Installation failed", error=image_error)
                     return
 
+                # Use the same dependency-validated graph for startup. Unrelated
+                # installed recipes may require configuration not supplied yet.
+                flags = pull_flags
                 # Step 3: Start
                 _write_progress(service_id, "starting", "Starting container...")
                 _precreate_data_dirs(service_id)

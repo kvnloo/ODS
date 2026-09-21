@@ -275,6 +275,52 @@ def _split_port_host(port_str):
     return host, rest
 
 
+_extension_build_contexts = {}
+
+
+def _extension_build_context(compose_path, build):
+    """Accept bounded build inputs; never forward arbitrary host paths/options."""
+    root = script_dir / "data" / "user-extensions"
+    directory = compose_path.parent
+    if directory.parent.resolve() != root.resolve() or directory.is_symlink():
+        raise ValueError("build must belong to an installed extension")
+    if isinstance(build, str):
+        build = {"context": build}
+    if not isinstance(build, dict) or set(build) - {"context", "dockerfile", "target", "args"}:
+        raise ValueError("unsupported build options")
+    context = build.get("context", ".")
+    if not isinstance(context, str) or "$" in context or ("\\" in context and os.name != "nt"):
+        raise ValueError("invalid build context")
+    # The API stages files in its /data mount. Resolve that precise alias on
+    # the host; Linux, macOS and Windows do not share the container's root.
+    alias = "/data/user-extensions/" + directory.name
+    if context == alias or context.startswith(alias + "/"):
+        context = "." + context[len(alias):]
+    candidate = pathlib.Path(context)
+    if not candidate.is_absolute():
+        candidate = directory / candidate
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(directory.resolve()) or not resolved.is_dir():
+        raise ValueError("build context escapes extension or is missing")
+    dockerfile = build.get("dockerfile", "Dockerfile")
+    if not isinstance(dockerfile, str) or "$" in dockerfile or ("\\" in dockerfile and os.name != "nt"):
+        raise ValueError("invalid Dockerfile path")
+    source = resolved / dockerfile
+    if not source.resolve().is_relative_to(resolved) or not source.is_file():
+        raise ValueError("Dockerfile escapes context or is missing")
+    # Build contexts may otherwise follow links outside their permitted tree.
+    for entry in resolved.rglob("*"):
+        if entry.is_symlink() or not entry.resolve().is_relative_to(resolved):
+            raise ValueError("symlinks are not supported in extension builds")
+    args = build.get("args", {})
+    if not isinstance(args, dict) or any(not isinstance(k, str) or not isinstance(v, (str, int, float, bool)) for k, v in args.items()):
+        raise ValueError("build arguments must have explicit values")
+    target = build.get("target")
+    if target is not None and (not isinstance(target, str) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", target)):
+        raise ValueError("invalid build target")
+    return str(resolved)
+
+
 def _scan_user_compose_content(compose_path):
     """Reject compose fragments containing dangerous directives.
 
@@ -298,6 +344,7 @@ def _scan_user_compose_content(compose_path):
         return (True, warnings)
 
     ok = True
+    build_contexts = {}
 
     def reject(msg):
         nonlocal ok
@@ -315,7 +362,10 @@ def _scan_user_compose_content(compose_path):
         if svc_def.get("privileged") is True:
             reject(f"service '{svc_name}' uses privileged mode")
         if "build" in svc_def:
-            reject(f"service '{svc_name}' uses a local build — only pre-built images are allowed for user extensions")
+            try:
+                build_contexts[svc_name] = {"build": {"context": _extension_build_context(compose_path, svc_def["build"])}}
+            except (ValueError, OSError) as exc:
+                reject(f"service '{svc_name}' build rejected: {exc}")
         user = svc_def.get("user")
         if user is not None and str(user).split(":")[0] in ("root", "0"):
             reject(f"service '{svc_name}' runs as root")
@@ -411,6 +461,8 @@ def _scan_user_compose_content(compose_path):
             if vol_type in ("none", "bind") and device.startswith("/"):
                 reject(f"named volume '{vol_name}' uses driver_opts to bind-mount host path '{device}'")
 
+    if ok:
+        _extension_build_contexts[str(compose_path.resolve())] = build_contexts
     return (ok, warnings)
 
 
@@ -859,6 +911,30 @@ if os.path.lexists(native_activation):
     except (ValueError, OSError, ImportError):
         print('ERROR: Native Pixel Compose selection needs recovery; retain its installation receipts.', file=sys.stderr)
         sys.exit(1)
+
+# Each extension owns its projection so narrowed installs cannot accidentally
+# include unrelated services or require their missing configuration.
+import tempfile
+projected = []
+for fragment in resolved:
+    projected.append(fragment)
+    path = (script_dir / fragment).resolve()
+    contexts = _extension_build_contexts.get(str(path))
+    if not contexts:
+        continue
+    overlay = path.parent / (".ods-build-context-" + path.name + ".json")
+    if overlay.is_symlink():
+        raise ValueError("Invalid build context overlay")
+    fd, temporary = tempfile.mkstemp(prefix=".build-context-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump({"services": contexts}, stream)
+        os.replace(temporary, overlay)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    projected.append(str(overlay.relative_to(script_dir)))
+resolved = projected
 
 def to_flags(files):
     return " ".join(f"-f {f}" for f in files)

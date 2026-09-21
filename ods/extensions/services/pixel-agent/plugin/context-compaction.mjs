@@ -154,7 +154,9 @@ export function createContextCompaction({agentId = 'pixel', readSession, readCon
     }
     const proof = ledger.measurement?.modelRevision === model.revision && ledger.measurement.sessionRevision === sessionRevision
       ? ledger.measurement : null;
-    const nativeFresh = entry?.totalTokensFresh === true && (!proof || entry.updatedAt >= proof.measuredAt);
+    // OpenClaw can mark cumulative session usage fresh after tool continuations.
+    // It is not the occupancy of one model call and must not replace its proof.
+    const nativeFresh = !requireModelObservation && entry?.totalTokensFresh === true && (!proof || entry.updatedAt >= proof.measuredAt);
     // Session metadata is saved after llm_output and may have a newer timestamp.
     // That alone does not invalidate this model's measured usage. A subsequent
     // compaction does, unless it supplied its own post-compaction measurement.

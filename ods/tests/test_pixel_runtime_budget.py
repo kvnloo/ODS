@@ -48,6 +48,7 @@ def test_shared_overlay_is_staged_idempotent_and_uses_selected_home(tmp_path, co
     assert staged.stat().st_mode & 0o777 == 0o600
     assert path.read_text() == before
     value = json.loads(staged.read_text())
+    assert value["agents"]["defaults"]["compaction"]["timeoutSeconds"] == 1800
     assert value['agents']['defaults']['sandbox']['docker']['binds'] == [
         str(openclaw_home / '.ods-exec-control') + ':/run/pixel-ods-control:ro']
     agent = value['agents']['list'][0]

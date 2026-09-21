@@ -4661,6 +4661,15 @@ ods_pixel_install_default_agent() {
         ai_bad "Pixel's compaction continuation repair could not verify its package bytes. See $pixel_log."
         return 1
     fi
+    # Honor the configured compaction budget on slow local providers.
+    if ! ods_pixel_run_as_owner "$owner" "$home" python3 \
+        "$plugin_root/host/openclaw_tool_recovery.py" \
+        --openclaw-bin "$openclaw_bin" --compaction-budget \
+        --state-dir "$home/.openclaw/ods-runtime-patches/compaction-budget" \
+        >>"$pixel_log" 2>&1; then
+        ai_bad "Pixel's compaction budget repair could not verify its package bytes. See $pixel_log."
+        return 1
+    fi
     # The runtime overlay above replaces the live configuration atomically.
     # Bind that exact canonical file before any fallible registry or service
     # operation. If either later step is interrupted, the next installer run
