@@ -518,6 +518,8 @@ def _patch_mutation_config(monkeypatch, tmp_path, lib_dir=None, user_dir=None):
     monkeypatch.setattr("routers.extensions._call_agent", lambda action, sid: True)
     monkeypatch.setattr("routers.extensions._call_agent_sync_config",
                         lambda sid, *, preserve_existing=False: True)
+    monkeypatch.setattr("routers.extensions._call_agent_install",
+                        lambda sid, operation_id=None: True)
 
 
 # --- Install endpoint ---
@@ -678,6 +680,11 @@ class TestInstallExtension:
         (data_dir / "database").write_bytes(b'owner database')
         _patch_mutation_config(monkeypatch, tmp_path, lib_dir=lib_dir,
                                user_dir=user_dir)
+        # Fixture-backed endpoint tests must never dial a live host agent on
+        # the machine running the suite, even if the route implementation
+        # changes to use the shared transport directly.
+        monkeypatch.setattr("routers.extensions.request_agent_json",
+                            lambda *args, **kwargs: pytest.fail("unexpected live host-agent request"))
 
         resp = test_client.post(
             "/api/extensions/my-ext/install",
