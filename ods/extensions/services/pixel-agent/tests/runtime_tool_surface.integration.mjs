@@ -23,10 +23,12 @@ test('working tools are direct while specialist tools remain in the real catalog
   const read = tool('read'), status = tool('pixel_ods_extension_request_status');
   const advance = tool('pixel_ods_extension_request_advance');
   const prepare = tool('pixel_ods_extension_request_prepare');
-  const specialist = tool('pixel_ods_extension_proposal');
-  const result = run([read, status, prepare, advance, specialist]);
-  assert.deepEqual(result.tools, [...controls, read, status, prepare, advance]);
-  assert.equal(result.catalogToolCount, 5);
+  const proposal = tool('pixel_ods_extension_proposal');
+  const library = tool('pixel_ods_python_library_proposal');
+  const specialist = tool('pixel_ods_workspace_preview');
+  const result = run([read, status, prepare, advance, proposal, library, specialist]);
+  assert.deepEqual(result.tools, [...controls, read, status, prepare, advance, proposal, library]);
+  assert.equal(result.catalogToolCount, 7);
   assert.equal(result.catalogRegistered, true);
   assert.ok(result.catalogRef.current);
 });
