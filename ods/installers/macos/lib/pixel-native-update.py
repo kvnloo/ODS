@@ -41,8 +41,6 @@ def activation_command(preparation, prepared, *, install_dir, ods_source, owner,
 def update(*, install_dir, ods_source, license_authorized=False, prepare_only=False):
     if sys.platform != 'darwin' or os.geteuid() == 0:
         raise ValueError('native-macos-owner-required')
-    if license_authorized is not True:
-        raise ValueError('pixel-license-authorization-required')
     install_dir, ods_source = Path(install_dir).resolve(strict=True), Path(ods_source).resolve(strict=True)
     stack = helper('pixel-native-stack')
     stack.resolve_files(install_dir, [])
@@ -74,7 +72,8 @@ def update(*, install_dir, ods_source, license_authorized=False, prepare_only=Fa
         print('Native update preparation: ' + str(work), flush=True)
         config = helper('pixel-native-config')
         source = config.bootstrap.acquire_source(ref=initial.DEFAULT_REF,
-            destination=work / 'source', license_authorized=True)
+            destination=work / 'source', license_authorized=True,
+            source_url=str(ods_source / 'vendor/pixel.bundle'))
         runtime = work / 'acquired-runtime'
         config.bootstrap.stage(source=source, ref=initial.DEFAULT_REF, destination=runtime, node=node, npm=npm)
         preparation = work / 'preparation'

@@ -251,8 +251,6 @@ def prepare_migration(*, source, ref, node, runtime, docker, ods_source, install
     """Stage a legacy migration without changing credentials, state or services."""
     if sys.platform != 'darwin' or os.geteuid() == 0:
         raise ValueError('native-macos-owner-required')
-    if license_authorized is not True:
-        raise ValueError('pixel-license-authorization-required')
     config, environment = helper('config'), helper('env')
     installer = helper('access-install')
     owner = pwd.getpwuid(os.getuid())
@@ -336,8 +334,6 @@ def prepare(*, source=None, ref, answers=None, node, runtime=None, sandbox_image
             install_dir=None, native_home=None):
     if sys.platform != 'darwin' or os.geteuid() == 0:
         raise ValueError('native-macos-owner-required')
-    if (source is None or runtime is None or sandbox_image is None) and license_authorized is not True:
-        raise ValueError('pixel-license-authorization-required')
     if runtime is None and not npm:
         raise ValueError('native-runtime-acquisition-requires-npm')
     config = helper('config')
@@ -372,7 +368,8 @@ def prepare(*, source=None, ref, answers=None, node, runtime=None, sandbox_image
             record['phase'] = 'source-acquisition'
             checkpoint()
             source = config.bootstrap.acquire_source(ref=ref, destination=destination / 'source',
-                license_authorized=license_authorized)
+                license_authorized=license_authorized,
+                source_url=str(Path(ods_source) / 'vendor/pixel.bundle'))
         if answers is None:
             record['phase'] = 'credentials'
             checkpoint()

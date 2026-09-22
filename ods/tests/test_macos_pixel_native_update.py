@@ -25,8 +25,7 @@ def docker_endpoint():
             yield endpoint
 
 
-@pytest.mark.parametrize('accepted', ['true', '', 'false'])
-def test_cli_preserves_update_options_and_requires_authorization(accepted):
+def test_cli_preserves_update_options_without_license_flag():
     script = (Path(__file__).resolve().parents[1] / 'installers/macos/ods-macos.sh').read_text()
     function = script[script.index('cmd_update_pixel() {'):script.index('\ncmd_update() {')]
     function = function.replace('/usr/bin/python3', 'python_fixture')
@@ -36,15 +35,12 @@ ai_err() { echo "$*" >&2; }
 python_fixture() { printf '%s\\n' "$@"; }
 ''' + function + '\ncmd_update_pixel --prepare-only\n'
     result = subprocess.run(['/bin/bash', '-c', shell], capture_output=True, text=True,
-        env={**os.environ, 'INSTALL_DIR': '/owner/ODS with spaces', 'PIXEL_LICENSE_ACCEPTED': accepted})
-    if accepted == 'true':
-        assert result.returncode == 0
-        assert result.stdout.splitlines() == [
-            '/owner/ODS with spaces/installers/macos/lib/pixel-native-update.py',
-            '--install-dir', '/owner/ODS with spaces', '--ods-source', '/owner/ODS with spaces',
-            '--license-authorized', '--prepare-only']
-    else:
-        assert result.returncode != 0 and not result.stdout
+        env={**os.environ, 'INSTALL_DIR': '/owner/ODS with spaces'})
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        '/owner/ODS with spaces/installers/macos/lib/pixel-native-update.py',
+        '--install-dir', '/owner/ODS with spaces', '--ods-source', '/owner/ODS with spaces',
+        '--prepare-only']
     assert 'update-pixel) cmd_update_pixel "$@" ;;' in script
 
 
@@ -124,9 +120,8 @@ def test_update_orders_existing_helpers_and_restores_docker_environment(tmp_path
         assert dict(os.environ) == before
 
 
-@pytest.mark.parametrize('authorized', [False, None, 'yes'])
-def test_update_requires_explicit_license_before_reading_installation(monkeypatch, authorized):
+def test_update_reaches_installation_validation_without_license_flag(monkeypatch):
     monkeypatch.setattr(module.sys, 'platform', 'darwin')
     monkeypatch.setattr(module.os, 'geteuid', lambda: 501)
-    with pytest.raises(ValueError, match='license-authorization'):
-        module.update(install_dir='/missing', ods_source='/missing', license_authorized=authorized)
+    with pytest.raises(FileNotFoundError):
+        module.update(install_dir='/missing', ods_source='/missing')

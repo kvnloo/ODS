@@ -12,14 +12,13 @@ import sys
 
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_REF = 'b33730436baf5d98bf58f7d57c090318fe19f433'
+DEFAULT_REF = '817214d5ec3d8aa583fe50c1dc7561f3c1a16dff'
 INGRESS_IMAGE = 'node:24-bookworm-slim'
 FRAGMENTS = ('extensions/services/pixel-model-relay/compose.yaml.disabled',
     'extensions/services/pixel-edge/compose.yaml.disabled',
     'installers/macos/pixel-native.compose.yaml.disabled')
 ERROR_GUIDANCE = {
     'native-apple-silicon-owner-required': 'Run as the signed-in owner on Apple Silicon, not with sudo.',
-    'pixel-license-authorization-required': 'Pixel requires explicit authorization under its license.',
     'existing-native-pixel-requires-migration-or-recovery':
         'Existing native Pixel state was found. This initial-install path cannot migrate or resume it; leave it intact.',
     'native-node-or-homebrew-required': 'Install native Node.js 22+ with npm, or Homebrew for automatic Node setup.',
@@ -43,11 +42,9 @@ def command(args, *, env=None, timeout=60):
     return result.stdout.strip()
 
 
-def preflight(install_dir, *, license_authorized):
+def preflight(install_dir, *, license_authorized=None):
     if sys.platform != 'darwin' or platform.machine() != 'arm64' or os.geteuid() == 0:
         raise ValueError('native-apple-silicon-owner-required')
-    if license_authorized is not True:
-        raise ValueError('pixel-license-authorization-required')
     install_dir = Path(install_dir)
     if not install_dir.is_absolute():
         raise ValueError('absolute-ods-installation-required')

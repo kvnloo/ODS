@@ -105,7 +105,7 @@ qualification or a claim of support for every Mac.
 
 The general macOS installer now offers an initial native Pixel path through
 `install-macos.sh --pixel` (see "Initial main-installer entry point" below).
-It requires explicit license authorization and does not migrate, update, or
+It uses the public ODS Pixel grant and does not migrate, update, or
 resume an existing native Pixel installation. Installed-fleet qualification
 remains a separate gate; the preparation checks below do not prove it.
 `lib/pixel-native-bootstrap.py` now stages an owner-run OpenClaw runtime from
@@ -119,7 +119,7 @@ Pixel's source, Operations and Frontier broker plugins are copied from the
 selected source, have dependencies installed with their committed npm lockfiles,
 and must pass the same isolated load proof. The real six-plugin bootstrap passed
 on the development Mac without invoking a broker or changing live services.
-It requires explicit license authorization from its caller, refuses root, and
+It requires no separate license acceptance from its caller, refuses root, and
 does not activate services or replace an existing destination. Node/npm must
 already be provisioned by the parent installer. It does not yet configure the
 agent. `lib/pixel-native-config.py` now stages an initial configuration through
@@ -1245,7 +1245,7 @@ and integrated recovery remain release gates.
 
 The preparation entry point can now acquire the runtime when `--runtime` is
 omitted (requires `--npm`), and build/qualify the sandbox when `--sandbox-image`
-is omitted. Either operation requires explicit `--license-authorized` before
+is omitted. Neither operation requires a separate license-authorization flag before
 creating preparation state or performing downloads/builds. It uses the existing
 pinned bootstrap, not a second installer implementation, and records acquisition
 or sandbox qualification failures separately. Supplied runtime/image inputs keep
@@ -1324,8 +1324,7 @@ a browser interaction through the production Portal.
 
 ### Owner source acquisition and preview executable
 
-The preparation CLI can now omit `--source`: with explicit
-`--license-authorized`, it acquires the official Pixel repository, checks out
+The preparation CLI can now omit `--source`: it acquires ODS's bundled Pixel source, checks out
 the caller-selected exact commit and validates its release manifest before
 runtime acquisition. Existing destinations are refused. A failed clone or
 verification leaves no published source checkout and records the preparation
@@ -1406,7 +1405,7 @@ the existing running installation has not been migrated by these tests.
 
 ### Qualification of the public-beta source selection
 
-The source selected by the shared installer, commit
+The source selected by the earlier private-source qualification, commit
 `b33730436baf5d98bf58f7d57c090318fe19f433`, was acquired and used for a fresh
 native runtime acquisition, sandbox image build/execution proof, candidate
 configuration, service/runtime packaging and owner layout. The opt-in acquire
@@ -1539,9 +1538,8 @@ by these preparation tests.
 
 ### Initial main-installer entry point (2026-09-20, qualification pending)
 
-`install-macos.sh --pixel` now connects the resolved base stack to native
-preparation and protected activation. This is an explicit initial-install path,
-requiring `PIXEL_LICENSE_ACCEPTED=true` under the applicable agreement. It refuses
+`install-macos.sh` now connects the resolved base stack to native Pixel
+preparation and protected activation by default; `--no-pixel` opts out. It refuses
 Intel, root execution and existing/partial protected native state before the main
 installation phases. It is not yet the migration/update entry point.
 
@@ -2036,7 +2034,7 @@ the earlier failed attempt had restored the previous runtime and verified
 full-access execution without deleting owner data. This single-machine update
 does not qualify clean installation, reboot or every supported hardware tier.
 
-`PIXEL_LICENSE_ACCEPTED=true ./installers/macos/ods-macos.sh update-pixel`
+`./installers/macos/ods-macos.sh update-pixel`
 uses the installed source's pinned Pixel release. It downloads and prepares the
 candidate as the signed-in owner, activates it through the existing protected
 joint migration, and publishes a verified atomic management selection. The
@@ -2045,7 +2043,7 @@ stops before protected activation; preparations are retained under
 `data/pixel-native/update-*` for diagnosis and recovery.
 
 The coordinator can also be invoked from a newer source checkout with explicit
-`--install-dir`, `--ods-source`, and `--license-authorized` arguments using
+`--install-dir` and `--ods-source` arguments using
 `installers/macos/lib/pixel-native-update.py`. It pins subprocesses to the active
 gateway's local Docker socket and restores inherited Docker environment overrides
 on exit. It does not reset credentials or remove models, history, or workspace.

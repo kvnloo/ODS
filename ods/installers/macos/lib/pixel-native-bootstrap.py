@@ -74,18 +74,30 @@ def selected_release(source, ref):
     return value
 
 
+ODS_BUNDLED_REF = '817214d5ec3d8aa583fe50c1dc7561f3c1a16dff'
+ODS_BUNDLED_SHA256 = '8fea465b1b42d82da0a286936d0e029b038321fd39793f5a849843ef11aee865'
+
+
 def acquire_source(*, ref, destination, license_authorized=False,
                    source_url='https://github.com/Osmantic/Pixel.git'):
     if sys.platform != 'darwin' or os.geteuid() == 0:
         raise BootstrapError('native-macos-owner-required')
-    if license_authorized is not True:
-        raise BootstrapError('pixel-license-authorization-required')
     if not re.fullmatch(r'[a-f0-9]{40}', ref):
         raise BootstrapError('exact-pixel-source-ref-required')
-    # Match the shared installer's official remote or an authorized local clone.
+    # The public ODS installer passes its pinned local bundle. Retain the
+    # canonical remote and a clean local checkout as explicit developer paths.
     if source_url != 'https://github.com/Osmantic/Pixel.git':
         local = Path(source_url)
-        if not local.is_absolute() or not local.is_dir():
+        if not local.is_absolute() or local.is_symlink():
+            raise BootstrapError('official-or-local-pixel-source-required')
+        if local.is_file():
+            if local.name != 'pixel.bundle' or ref != ODS_BUNDLED_REF:
+                raise BootstrapError('invalid-bundled-pixel-source')
+            if local.stat().st_size > 64 * 1024 * 1024:
+                raise BootstrapError('bundled-pixel-source-too-large')
+            if hashlib.sha256(local.read_bytes()).hexdigest() != ODS_BUNDLED_SHA256:
+                raise BootstrapError('bundled-pixel-source-digest-mismatch')
+        elif not local.is_dir():
             raise BootstrapError('official-or-local-pixel-source-required')
         source_url = str(local.resolve(strict=True))
     destination = Path(destination)
@@ -308,8 +320,6 @@ def sandbox_main():
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--license-authorized', action='store_true')
     args = parser.parse_args(sys.argv[2:])
-    if not args.license_authorized:
-        parser.error('Pixel authorization must be confirmed before acquisition')
     try:
         receipt = prepare_sandbox(source=args.source, ref=args.source_ref, docker=args.docker)
     except BootstrapError as error:
@@ -331,8 +341,6 @@ def main():
     parser.add_argument('--license-authorized', action='store_true',
                         help='Confirm the caller already obtained applicable Pixel authorization')
     args = parser.parse_args()
-    if not args.license_authorized:
-        parser.error('Pixel authorization must be confirmed before acquisition')
     try:
         path = stage(source=args.source, ref=args.source_ref, destination=args.destination,
                      node=args.node, npm=args.npm)

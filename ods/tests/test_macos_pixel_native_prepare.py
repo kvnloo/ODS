@@ -145,14 +145,14 @@ def test_storage_preparation_records_existing_data_without_docker_mutations(tmp_
 
 
 @pytest.mark.parametrize('fault', [None, 'configuration', 'services', 'runtime', 'layout', 'existing-home',
-    'acquire', 'runtime-acquisition', 'sandbox-qualification', 'license', 'npm',
-    'source', 'source-acquisition', 'source-license', 'auto', 'credentials', 'onboarding'])
+    'acquire', 'runtime-acquisition', 'sandbox-qualification', 'npm',
+    'source', 'source-acquisition', 'auto', 'credentials', 'onboarding'])
 def test_initial_preparation_orders_stages_and_records_failures(tmp_path, monkeypatch, fault):
     monkeypatch.setattr(module.sys, 'platform', 'darwin')
     monkeypatch.setattr(module.os, 'geteuid', lambda: 501)
     calls = []
     automatic = fault in ('auto', 'credentials', 'onboarding')
-    acquiring = fault in ('acquire', 'runtime-acquisition', 'sandbox-qualification', 'license', 'npm')
+    acquiring = fault in ('acquire', 'runtime-acquisition', 'sandbox-qualification', 'npm')
     home, destination = tmp_path / 'Owner Home', tmp_path / 'Preparation'
     if fault == 'existing-home': home.mkdir()
     def stage(name, **kwargs):
@@ -178,18 +178,18 @@ def test_initial_preparation_orders_stages_and_records_failures(tmp_path, monkey
             ensure_credentials=lambda path, **kw: stage('credentials', **kw) and b'fixture-environment',
             snapshot=lambda path: (b'fixture-environment', None), restore=lambda *args, **kw: True))
     def run():
-        return module.prepare(source=None if fault in ('source', 'source-acquisition', 'source-license') else tmp_path,
+        return module.prepare(source=None if fault in ('source', 'source-acquisition') else tmp_path,
             ref='a' * 40, answers=None if automatic else tmp_path / 'answers',
             install_dir=tmp_path if automatic else None, native_home=home if automatic else None,
             node='/node', runtime=None if acquiring else '/runtime',
             sandbox_image=None if acquiring else 'sha256:' + 'b' * 64,
-            npm=None if fault == 'npm' else '/npm', license_authorized=fault not in ('license', 'source-license'),
+            npm=None if fault == 'npm' else '/npm', license_authorized=False,
             destination=destination, docker='/docker', docker_socket='/socket', ods_source=tmp_path,
             ingress_image='sha256:' + 'c' * 64, compose_project='ods', ingress_gid=20)
     failed = fault not in (None, 'acquire', 'source', 'auto')
     if failed:
         with pytest.raises(ValueError): run()
-        if fault in ('existing-home', 'license', 'npm', 'source-license'):
+        if fault in ('existing-home', 'npm'):
             assert not calls and not destination.exists()
             return
     else: assert run() == destination / 'preparation.json'
@@ -242,7 +242,7 @@ def test_failed_initial_preparation_restores_credentials_unless_owner_edited(tmp
         assert path.read_bytes() == before
 
 
-@pytest.mark.parametrize('fault', [None, 'license', 'existing', 'onboarding', 'configuration',
+@pytest.mark.parametrize('fault', [None, 'existing', 'onboarding', 'configuration',
     'services', 'runtime', 'joint-plan', 'source-drift'])
 def test_legacy_preparation_preserves_active_files_and_keeps_phase_receipts(tmp_path, monkeypatch, fault):
     monkeypatch.setattr(module.sys, 'platform', 'darwin')
@@ -288,14 +288,14 @@ def test_legacy_preparation_preserves_active_files_and_keeps_phase_receipts(tmp_
     def run():
         return module.prepare_migration(source=tmp_path, ref='c' * 40, node='/node', runtime='/runtime',
             docker='/docker', ods_source=tmp_path, install_dir=tmp_path, destination=destination,
-            license_authorized=fault != 'license')
+            license_authorized=False)
     if fault:
         with pytest.raises(ValueError): run()
     else:
         assert run() == destination / 'preparation.json'
     assert environment.read_bytes() == b'owner-environment'
     assert previous.read_bytes() == body + (b' ' if fault == 'source-drift' else b'')
-    if fault in ('license', 'existing'):
+    if fault == 'existing':
         assert not events and not (destination / 'preparation.json').exists()
     else:
         record = json.loads((destination / 'preparation.json').read_text())

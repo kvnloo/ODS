@@ -1,7 +1,7 @@
 """Opt-in real renderer/loader qualification; never installs or starts services.
 
 Set ODS_TEST_NATIVE_CONFIG_LIVE=1 and ODS_TEST_PIXEL_SOURCE,
-ODS_TEST_PIXEL_RUNTIME, ODS_TEST_PIXEL_NODE to prepared, licensed inputs.
+ODS_TEST_PIXEL_RUNTIME, ODS_TEST_PIXEL_NODE to prepared inputs.
 """
 import importlib.util
 import base64
@@ -16,7 +16,7 @@ import pytest
 
 pytestmark = pytest.mark.skipif(
     sys.platform != 'darwin' or os.environ.get('ODS_TEST_NATIVE_CONFIG_LIVE') != '1',
-    reason='requires an opted-in Mac and prepared licensed Pixel runtime')
+    reason='requires an opted-in Mac and prepared Pixel runtime')
 ROOT = Path(__file__).resolve().parents[1]
 
 
