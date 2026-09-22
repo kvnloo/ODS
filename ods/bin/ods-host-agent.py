@@ -6544,6 +6544,11 @@ def _read_install_operation(service_id, operation_id):
         live = (service_id, operation_id) in _install_operation_live
     if value['state'] in {'accepted', 'running'} and not live:
         value = {**value, 'state': 'uncertain'}
+    elif value['state'] in {'succeeded', 'failed'} and live:
+        # Progress can record a terminal result before the worker's finally
+        # block releases its resources. Recipe recovery must not overwrite
+        # files that this worker may still be using.
+        value = {**value, 'state': 'running', 'exit_verified': False}
     return value
 
 

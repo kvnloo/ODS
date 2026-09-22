@@ -2408,9 +2408,24 @@ def _install_from_library(service_id: str) -> None:
                 status_code=409,
                 detail=f"Extension already installed: {service_id}",
             )
-        logger.warning("Cleaning up extension directory under lock before retry: %s", dest)
-        shutil.rmtree(dest)
-        _clear_progress(service_id)
+        # A failed install may already have created settings or application
+        # data. Retry its existing definition; never delete the directory.
+        if (not has_compose or has_disabled or not (dest / 'manifest.yaml').is_file()
+                or (dest / 'compose.yaml').is_symlink() or (dest / 'manifest.yaml').is_symlink()):
+            raise HTTPException(status_code=409, detail='Existing extension definition requires repair; files were preserved')
+        # Validate against the same staged definition as a first install. This
+        # preserves curated-library policy without granting those privileges to
+        # a modified installed definition or an imported GitHub recipe.
+        with _staged_library_extension(service_id, dest) as (staged, _source_digest):
+            for name in ('manifest.yaml', 'compose.yaml', 'upstream.json'):
+                actual, expected = dest / name, staged / name
+                if (actual.is_symlink() or actual.exists() != expected.exists()
+                        or (expected.exists() and (not actual.is_file()
+                            or actual.stat().st_size != expected.stat().st_size
+                            or actual.read_bytes() != expected.read_bytes()))):
+                    raise HTTPException(status_code=409,
+                        detail='Existing extension definition changed; files were preserved')
+        return
 
     with _staged_library_extension(service_id, dest) as (staged, source_digest):
         installed_digest = _extension_tree_digest(staged)
@@ -2545,10 +2560,8 @@ def _install_extension(service_id: str, api_key: str, operation_id: str | None =
             raise HTTPException(
                 status_code=409, detail=f"Extension already installed: {service_id}",
             )
-        # Broken or failed directory â€” clean up before reinstall.
-        logger.warning("Cleaning up extension directory before retry: %s", dest)
-        shutil.rmtree(dest)
-        _clear_progress(service_id)
+        # Preserve existing files. The locked helper verifies whether this
+        # failed definition can be retried without replacing owner data.
 
     # NOTE: pre_install hook is deferred to a future version. On fresh library
     # installs, the extension directory doesn't exist yet, so the host agent

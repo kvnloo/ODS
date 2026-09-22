@@ -8729,6 +8729,22 @@ def test_install_operation_replay_observes_exact_failed_attempt(install_operatio
     assert len(launches) == 2  # New attempt only after a terminal observation.
 
 
+@pytest.mark.parametrize('terminal_state', ['failed', 'succeeded'])
+def test_install_result_is_not_terminal_until_worker_exits(tmp_path, monkeypatch, terminal_state):
+    monkeypatch.setattr(_mod, 'DATA_DIR', tmp_path)
+    identity = ('operation-test', 'b' * 32)
+    live = {identity}
+    monkeypatch.setattr(_mod, '_install_operation_live', live)
+    _mod._save_install_operation({'service_id': identity[0], 'operation_id': identity[1],
+        'run_setup_hook': False, 'state': terminal_state, 'exit_verified': True})
+    observed = _mod._read_install_operation(*identity)
+    assert observed['state'] == 'running'
+    assert observed['exit_verified'] is False
+    # Observation does not erase the durable result; worker release exposes it.
+    live.clear()
+    assert _mod._read_install_operation(*identity)['state'] == terminal_state
+
+
 def test_orphaned_install_is_uncertain_and_blocks_new_attempt(install_operation_host):
     invoke, responses, launches = install_operation_host
     _mod._save_install_operation({'service_id': 'operation-test', 'operation_id': 'c' * 32,

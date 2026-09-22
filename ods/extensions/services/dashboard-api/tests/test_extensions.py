@@ -582,8 +582,8 @@ class TestInstallExtension:
         assert (user_dir / "my-ext").is_dir()
         assert (user_dir / "my-ext" / "compose.yaml").exists()
 
-    def test_install_cleans_broken_directory(self, test_client, monkeypatch, tmp_path):
-        """Install succeeds when dest dir exists but has no compose files (broken state)."""
+    def test_install_preserves_broken_directory(self, test_client, monkeypatch, tmp_path):
+        """An incomplete definition requires repair without deleting owner files."""
         lib_dir = _setup_library_ext(tmp_path, "my-ext")
         # Create a broken user extension directory (no compose.yaml or compose.yaml.disabled)
         user_dir = tmp_path / "user"
@@ -593,16 +593,19 @@ class TestInstallExtension:
         (broken_dir / "manifest.yaml").write_text("leftover: true\n")
         _patch_mutation_config(monkeypatch, tmp_path, lib_dir=lib_dir,
                                user_dir=user_dir)
+        installs = []
+        monkeypatch.setattr("routers.extensions._call_agent_install", lambda sid: installs.append(sid))
 
         resp = test_client.post(
             "/api/extensions/my-ext/install",
             headers=test_client.auth_headers,
         )
 
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["action"] == "installed"
-        assert (user_dir / "my-ext" / "compose.yaml").exists()
+        assert resp.status_code == 409
+        assert "files were preserved" in resp.json()["detail"]
+        assert (broken_dir / "manifest.yaml").read_text() == "leftover: true\n"
+        assert not (broken_dir / "compose.yaml").exists()
+        assert installs == []
 
     def test_install_stages_tmp_under_user_extensions_dir(
         self, test_client, monkeypatch, tmp_path,
@@ -646,10 +649,19 @@ class TestInstallExtension:
         )
         assert resp.status_code == 409
 
-    def test_install_retries_after_error_progress(self, test_client, monkeypatch, tmp_path):
-        """A terminal install error should allow retrying the library install."""
-        lib_dir = _setup_library_ext(tmp_path, "my-ext")
+    @pytest.mark.parametrize('curated_hosts', [False, True])
+    @pytest.mark.parametrize('changed_definition', [False, True])
+    def test_install_retries_after_error_progress(self, test_client, monkeypatch, tmp_path,
+                                                  curated_hosts, changed_definition):
+        """A terminal install error retries without discarding owner files."""
+        compose = _SAFE_COMPOSE + ('    extra_hosts: ["host.docker.internal:host-gateway"]\n' if curated_hosts else '')
+        lib_dir = _setup_library_ext(tmp_path, "my-ext", compose_content=compose)
         user_dir = _setup_user_ext(tmp_path, "my-ext", enabled=True)
+        for name in ('manifest.yaml', 'compose.yaml'):
+            (user_dir / 'my-ext' / name).write_bytes((lib_dir / 'my-ext' / name).read_bytes())
+        if changed_definition:
+            (user_dir / 'my-ext' / 'compose.yaml').write_text(compose + '    command: owner-command\n')
+        previous_compose = (user_dir / 'my-ext' / 'compose.yaml').read_bytes()
         progress_dir = tmp_path / "extension-progress"
         progress_dir.mkdir()
         (progress_dir / "my-ext.json").write_text(json.dumps({
@@ -659,7 +671,11 @@ class TestInstallExtension:
             "started_at": "2026-01-01T00:00:00+00:00",
             "updated_at": "2026-01-01T00:00:00+00:00",
         }))
-        (user_dir / "my-ext" / "stale.txt").write_text("left over")
+        (user_dir / "my-ext" / "owner-notes.txt").write_text("keep this")
+        (user_dir / "my-ext" / ".env").write_text("SETTING=custom")
+        data_dir = user_dir / "my-ext" / "data"
+        data_dir.mkdir()
+        (data_dir / "database").write_bytes(b'owner database')
         _patch_mutation_config(monkeypatch, tmp_path, lib_dir=lib_dir,
                                user_dir=user_dir)
 
@@ -668,10 +684,14 @@ class TestInstallExtension:
             headers=test_client.auth_headers,
         )
 
-        assert resp.status_code == 200
-        assert not (user_dir / "my-ext" / "stale.txt").exists()
+        assert resp.status_code == (409 if changed_definition else 200)
+        assert (user_dir / "my-ext" / "owner-notes.txt").read_text() == "keep this"
+        assert (user_dir / "my-ext" / ".env").read_text() == "SETTING=custom"
+        assert (data_dir / "database").read_bytes() == b'owner database'
         assert (user_dir / "my-ext" / "compose.yaml").exists()
-        assert resp.json()["action"] == "installed"
+        assert (user_dir / 'my-ext' / 'compose.yaml').read_bytes() == previous_compose
+        if not changed_definition:
+            assert resp.json()["action"] == "installed"
 
     def test_install_rejects_symlinked_retry_directory(
         self, test_client, monkeypatch, tmp_path,
