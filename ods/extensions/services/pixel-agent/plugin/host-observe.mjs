@@ -420,6 +420,7 @@ function extensionReadResult(receipt, action, target, serviceId, page = {}) {
     try { inspection = JSON.parse(step?.stdout); } catch { /* Unverified payload. */ }
     failed = step?.target !== target || step?.action !== 'ods.extensions.inspect' ||
       step?.exitCode !== 0 || step?.stderr !== '' ||
+      Boolean(step?.outputTruncated?.stdout || step?.outputTruncated?.stderr) ||
       inspection?.schemaVersion !== 1 || inspection?.kind !== 'ods-pixel-extension-lifecycle' ||
       inspection?.action !== 'inspect' || inspection?.extensionId !== serviceId ||
       !['ready', 'inspected', 'blocked'].includes(inspection?.outcome);
@@ -454,7 +455,15 @@ function extensionReadResult(receipt, action, target, serviceId, page = {}) {
   const next = 'The lookup did not establish the extension state. Do not infer absence or retry an installation. ' +
     'Catalog search/list can provide exact extension IDs; inspection requires an observed ID. ' +
     'If the catalog is unavailable, report that uncertainty.';
-  return {...toolResult({...receipt, next}), isError: true};
+  const observation = {
+    kind: 'ods-extension-lookup', action, target,
+    ...(serviceId ? {extensionId: serviceId} : {}),
+    jobId: receipt.jobId, lookupStatus: 'unverified', brokerStatus: receipt.status,
+    installationStartedByThisCall: false, runtimeVerified: false,
+    boundary: EXTENSION_READ_BOUNDARY, next,
+  };
+  return {...toolResult({...receipt, next}), isError: true,
+    content: [{type: 'text', text: JSON.stringify(observation)}]};
 }
 
 export function createExtensionReadTool({ requestDir = REQUEST_DIR, resultDir, timeoutMs, pollIntervalMs } = {}) {

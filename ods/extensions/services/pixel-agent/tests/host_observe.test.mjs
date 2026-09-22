@@ -64,7 +64,8 @@ test('inventory pages retain full evidence without sending the entire catalog as
   } finally { await rm(root, {recursive:true,force:true}); }
 });
 
-test('completed broker delivery preserves a failed inspection as a tool error', async () => {
+for (const truncated of [false, true]) {
+test(`completed broker delivery does not verify ${truncated ? 'truncated' : 'failed'} inspection`, async () => {
   const root = await mkdtemp(join(tmpdir(), 'pixel-extension-logical-error-'));
   const requestDir = join(root, 'requests');
   const resultDir = join(root, 'results');
@@ -82,19 +83,27 @@ test('completed broker delivery preserves a failed inspection as a tool error', 
     const receipt = {schemaVersion:2, jobId:request.jobId, status:'succeeded', steps:[{
       stepId:'action', target:request.target, action:request.action, exitCode:0,
       stdout:JSON.stringify({schemaVersion:1, kind:'ods-pixel-extension-lifecycle', action:'inspect',
-        extensionId:'unknown-name', outcome:'failed', currentStatus:'unknown'}), stderr:'',
-      outputTruncated:{stdout:false,stderr:false}, riskSignals:[],
+        extensionId:'unknown-name', outcome:truncated ? 'ready' : 'failed', currentStatus:'unknown'}), stderr:'',
+      outputTruncated:{stdout:truncated,stderr:false}, riskSignals:[],
     }]};
     await publishResult(join(resultDir, names[0]), receipt);
     const result = await pending;
     assert.equal(result.isError, true);
     assert.equal(result.details.jobId, request.jobId);
     assert.deepEqual(result.details.steps, receipt.steps);
+    const observation = JSON.parse(result.content[0].text);
+    assert.equal(observation.lookupStatus, 'unverified');
+    assert.equal(observation.brokerStatus, 'succeeded');
+    assert.equal(observation.action, 'inspect');
+    assert.equal(observation.installationStartedByThisCall, false);
+    assert.equal(observation.runtimeVerified, false);
+    assert.equal(Object.hasOwn(observation, 'status'), false);
     assert.match(result.details.next, /did not establish/);
     assert.match(result.details.next, /exact extension IDs/);
     assert.equal((await readdir(requestDir)).filter(name=>name.endsWith('.json')).length, 1);
   } finally { await rm(root, {recursive:true,force:true}); }
 });
+}
 
 test("extension read keeps concurrent requests and broker results distinct", async () => {
   const root = await mkdtemp(join(tmpdir(), "pixel-extension-read-"));
