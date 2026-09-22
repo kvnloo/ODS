@@ -3266,6 +3266,23 @@ function validInstallationPrerequisites(value, extensionId) {
   return value.state === expected;
 }
 
+function validExtensionIntegration(value, extensionId) {
+  if (value === null) return true;
+  if (!exactKeys(value, ['schemaVersion','extensionId','scope','contentTrust','description',
+    'declaredConnection','documentation','documentationTruncated','connectivityVerified','projectIntegrationVerified']) ||
+      value.schemaVersion !== 1 || value.extensionId !== extensionId ||
+      value.scope !== 'recipe-integration-guidance' || value.contentTrust !== 'untrusted-recipe-evidence' ||
+      value.connectivityVerified !== false || value.projectIntegrationVerified !== false ||
+      typeof value.description !== 'string' || [...value.description].length > 2000 ||
+      !(value.documentation === null || typeof value.documentation === 'string' && [...value.documentation].length <= 24000) ||
+      typeof value.documentationTruncated !== 'boolean' ||
+      !value.declaredConnection || typeof value.declaredConnection !== 'object' || Array.isArray(value.declaredConnection)) return false;
+  return Object.entries(value.declaredConnection).every(([key, field]) =>
+    ['type','container_name','default_host','host_env','external_port_env'].includes(key)
+      ? typeof field === 'string' && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(field)
+      : ['port','external_port_default'].includes(key) && Number.isInteger(field) && field >= 1 && field <= 65535);
+}
+
 function extensionLifecycleResult(step, submittedAction) {
   const expectedAction = submittedAction?.action?.replace(/^ods\.extensions\./, "");
   const submittedParameters = submittedAction?.parameters;
@@ -3317,8 +3334,11 @@ function extensionLifecycleResult(step, submittedAction) {
   if (scopedConfiguration) topKeys.push("configurationScope", "runtimeRequirementsVerified");
   const prerequisites = Object.prototype.hasOwnProperty.call(value ?? {}, "installationPrerequisites");
   if (prerequisites) topKeys.push("installationPrerequisites");
+  const integration = Object.prototype.hasOwnProperty.call(value ?? {}, "integration");
+  if (integration) topKeys.push("integration");
   if (
     !exactKeys(value, topKeys) ||
+    (integration && (expectedAction !== 'inspect' || !validExtensionIntegration(value.integration, value.extensionId))) ||
     (prerequisites && (expectedAction !== "inspect" ||
       !validInstallationPrerequisites(value.installationPrerequisites, value.extensionId))) ||
     (scopedConfiguration && (value.configurationScope !== "declared-environment-keys" ||

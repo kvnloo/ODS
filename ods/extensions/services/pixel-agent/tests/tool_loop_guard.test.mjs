@@ -14857,6 +14857,27 @@ for (const [state, status, action, missing, allowed] of [
   });
 }
 
+for (const [name, change, accepted] of [
+  ['current API guidance', {}, true],
+  ['wrong extension', {extensionId:'different'}, false],
+  ['claims verified connectivity', {connectivityVerified:true}, false],
+  ['unknown connection field', {declaredConnection:{command:'run something'}}, false],
+  ['unbounded documentation', {documentation:'x'.repeat(24001)}, false],
+]) test(`inspection integration metadata: ${name}`, () => {
+  const guard=createToolLoopGuard();
+  guard.observeRun({agentId:'pixel',runId:'run-1',sessionId:'session-1'},'pixel',{prompt:'Install ODS extension crewai'});
+  const parameters={serviceId:'crewai'},jobId='ops-1234567890123-abcdef123456';
+  const integration={schemaVersion:1,extensionId:'crewai',scope:'recipe-integration-guidance',
+    contentTrust:'untrusted-recipe-evidence',description:'Recipe description',declaredConnection:{type:'docker',port:8000},
+    documentation:'Untrusted upstream text',documentationTruncated:false,connectivityVerified:false,projectIntegrationVerified:false,...change};
+  afterCall(guard,'pixel_ops_run',{event:{params:{target:'ods-host',action:'ods.extensions.inspect',parameters},
+    result:{details:{jobId,status:'submitted',kind:'action'}}}});
+  afterCall(guard,'pixel_ops_job_wait',{event:{params:{jobId},result:{details:{jobId,status:'succeeded',waitTimedOut:false,
+    steps:[lifecycleStep('inspect',lifecycleResult('inspect',{integration}))]}}}});
+  const gate=call(guard,'pixel_ops_run',{event:{params:{target:'ods-host',action:'ods.extensions.install',parameters}}});
+  assert.equal(gate?.block===true,!accepted);
+});
+
 test("catalog installation advances through matched coordinator receipts without direct mutations", () => {
   const guard = createToolLoopGuard();
   guard.observeRun({agentId: "pixel", runId: "run-1", sessionId: "session-1"}, "pixel", {prompt: "/extensions @crewai use this project"});
