@@ -15057,3 +15057,25 @@ test("later failed preview work retains only the same session's historical publi
     }
   }
 });
+
+
+test("publication preserves its receipt without hiding a failed or pending check", () => {
+  for (const status of ["failed", "pending"]) {
+    const guard = createToolLoopGuard();
+    const {details, params} = seedNamedPreview(guard);
+    const check = {command: "npm test", workdir: "/workspace/log-viewer-lab"};
+    call(guard, "exec", {event: {params: check}, context: {toolCallId: "check"}});
+    afterCall(guard, "exec", {event: {params: check, result: {
+      details: status === "pending" ? {status: "running", sessionId: "check-process"}
+        : {status: "completed", exitCode: 1},
+    }}, context: {toolCallId: "check"}});
+    // The later publication succeeds; it verifies bytes, not test outcomes.
+    afterCall(guard, "pixel_ods_workspace_preview", {event: {params, result: {details}}});
+    const result = guard.verificationForRun("run-1");
+    assert.equal(result.status, status);
+    assert.equal(result.preview.url, details.url);
+    assert.ok(result.text.includes(status === "pending"
+      ? VERIFICATION_PENDING_DELIVERY_PREFIX : VERIFICATION_FAILED_DELIVERY_PREFIX));
+    assert.match(result.text, /Open preview/);
+  }
+});

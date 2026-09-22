@@ -481,3 +481,18 @@ not complete the new request or grant workspace scope. Regression coverage check
 failure status plus the retained link, and no cross-session disclosure. The prompt
 classifier and semantic verification gaps remain; this fix does not assert that
 the failed verification itself succeeded.
+
+### Publication does not override verification failures
+
+`verificationForRun` returned passed whenever the current static publication had
+a verified receipt, before consulting a recorded failed/pending workspace check.
+The publication branch now preserves failed/pending check status and its explanation
+while retaining the exact preview receipt/link. It does not revoke the published
+artifact or claim it verifies behavior. The regression exercises a recorded failed
+or running test followed by successful publication. All 542 guard tests pass.
+
+This fixes aggregation for tracked checks, not semantic verification in arbitrary
+commands. The existing command recognizer covers named test runners; it does not
+prove that an arbitrary Node command checks the requested JavaScript. A printed
+success sentence remains no evidence of that requirement. Replacing keyword-driven
+completion with explicit, scoped evidence remains part of the migration.

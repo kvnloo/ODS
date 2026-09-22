@@ -9585,9 +9585,16 @@ export function createToolLoopGuard({
             : WORKSPACE_PREVIEW_NOT_CREATED_DELIVERY_PREFIX,
         };
       }
+      // Publication and verification are independent evidence. A successful
+      // snapshot cannot turn a failed or still-running check into completion.
+      const checkStatus = state.latestVerificationStatus;
+      const checkIncomplete = checkStatus === "failed" || checkStatus === "pending";
+      const checkText = checkStatus === "failed" ? VERIFICATION_FAILED_DELIVERY_PREFIX
+        : checkStatus === "pending" ? VERIFICATION_PENDING_DELIVERY_PREFIX : "";
       return {
-        status: "passed",
+        status: checkIncomplete ? checkStatus : "passed",
         text:
+          (checkText ? `${checkText}\n\n` : "") +
           `${WORKSPACE_PREVIEW_PUBLISHED_DELIVERY_PREFIX}\n\n` +
           `[Open preview](${state.workspacePreview.url})\n\n` +
           (state.workspacePreviewModelAuthored
