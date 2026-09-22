@@ -52,6 +52,42 @@ class InstallationJournal:
                 os.unlink(temporary)
 
 
+def verify_failed_attempt(journal, service_id, observe):
+    """Read the exact terminal attempt before a coordinator revises its recipe.
+
+    A catalog error or absent worker is not enough. No journal mutation happens
+    here, and a lost observation must never authorize another installation.
+    """
+    record = journal.records.get(service_id)
+    if (not isinstance(record, dict) or record.get('action') != 'install'
+            or not isinstance(record.get('operationId'), str)
+            or not re.fullmatch(r'[a-f0-9]{32}', record['operationId'])):
+        raise ValueError('No exact installation attempt to reconcile')
+    receipt = observe(service_id, record['operationId'])
+    if (not isinstance(receipt, dict) or receipt.get('service_id') != service_id
+            or receipt.get('operation_id') != record['operationId']
+            or receipt.get('state') != 'failed'):
+        raise ValueError('Installation failure is not confirmed')
+    return dict(record)
+
+
+def retire_failed_attempt(journal, service_id, expected_record, observe):
+    """After durable recipe commit, retire only its unchanged failed attempt.
+
+    Caller retains the receipt and old recipe in the revision journal and holds
+    the coordinator/lifecycle locks. This function neither dispatches nor erases
+    host receipts. A subsequent advance obtains a new operation identity.
+    """
+    if verify_failed_attempt(journal, service_id, observe) != expected_record:
+        raise ValueError('Installation attempt changed during revision')
+    del journal.records[service_id]
+    try:
+        journal.save()
+    except Exception:
+        journal.records[service_id] = expected_record
+        raise
+
+
 def advance_installation(read_plan, journal, operation_lock, dispatch, *, observe=None):
     """Recheck after acquiring the lifecycle lock; retain ambiguous effects."""
     def choose(plan):

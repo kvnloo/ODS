@@ -123,6 +123,37 @@ def test_non_commands_and_unsafe_repository_targets_do_not_create_requests(tmp_p
     assert not list(tmp_path.iterdir())
 
 
+def test_revision_binding_requires_exact_previous_binding_and_preserves_identity(tmp_path):
+    import copy
+    from test_extension_recipe_validation import candidate
+    from test_extension_recipe_drafts import evidence
+    from extension_recipe_drafts import save_draft
+    initial = candidate()
+    create_request(tmp_path, 'owner', 'chat', 'turn', '/extensions ' + initial['repository'], now=10)
+    drafts = tmp_path / 'drafts'; drafts.mkdir()
+    def bind(value, **kwargs):
+        validation = evidence(value)
+        draft = save_draft(drafts, 'owner', value, validation)
+        return bind_proposal(tmp_path, 'owner', 'chat', 'turn', value, validation, draft, now=11, **kwargs)
+    first = bind(initial)
+    revised = copy.deepcopy(initial); revised['commit'] = 'b' * 40
+    for expected in [{}, {**first['proposal'], 'recipeDigest': 'c' * 64}]:
+        with pytest.raises(ValueError): bind(revised, expected_proposal=expected)
+        assert read_request(tmp_path, 'owner', 'chat', 'turn', now=11) == first
+    renamed = copy.deepcopy(revised); renamed['manifest']['service']['id'] = 'other'
+    with pytest.raises(ValueError): bind(renamed, expected_proposal=first['proposal'])
+    second = bind(revised, expected_proposal=first['proposal'])
+    assert second['proposal'] != first['proposal']
+    assert second['proposal']['extensionId'] == first['proposal']['extensionId']
+    assert second['expiresAt'] == first['expiresAt']
+    assert second['installationStarted'] is False
+    assert (drafts / (first['proposal']['draftId'] + '.json')).exists()
+    with pytest.raises(ValueError): bind(initial, expected_proposal=first['proposal'])
+    assert read_request(tmp_path, 'owner', 'chat', 'turn', now=11) == second
+    cancel_request(tmp_path, 'owner', 'chat', 'turn', now=12)
+    with pytest.raises(ValueError): bind(initial, expected_proposal=second['proposal'])
+
+
 def test_api_request_lifecycle_never_calls_installation(monkeypatch, tmp_path):
     from routers import extensions
     monkeypatch.setattr(extensions, '_extensions_lock_path', lambda: tmp_path / '.lock')

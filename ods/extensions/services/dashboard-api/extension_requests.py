@@ -161,8 +161,14 @@ def active_session_request(directory, owner, session_hash, *, now=None):
     return current
 
 
-def bind_proposal(directory, owner, chat_id, request_id, candidate, validation, draft, *, now=None):
-    """Bind one exact validated proposal; the caller holds the request lock."""
+def bind_proposal(directory, owner, chat_id, request_id, candidate, validation, draft, *, now=None,
+                  expected_proposal=None):
+    """Bind a validated proposal under the caller's request lock.
+
+    Revision is compare-and-swap, never implicit. Its coordinator must verify
+    terminal host failure and preserve the previous package before passing the
+    exact saved binding. This primitive neither edits packages nor retries work.
+    """
     current = read_request(directory, owner, chat_id, request_id, now=now)
     digest = hashlib.sha256(json.dumps(candidate, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
     repository = 'https://github.com/' + repository_identity(candidate.get('repository')).lower()
@@ -174,10 +180,15 @@ def bind_proposal(directory, owner, chat_id, request_id, candidate, validation, 
         raise ValueError('Proposal does not match active owner request')
     proposal = {'draftId': draft['draftId'], 'recipeDigest': digest,
                 'extensionId': candidate['manifest']['service']['id']}
+    if expected_proposal is not None and (current.get('proposal') != expected_proposal
+            or not isinstance(expected_proposal, dict)
+            or proposal['extensionId'] != expected_proposal.get('extensionId')):
+        raise ValueError('Revision no longer matches the bound proposal')
     if current.get('proposal') is not None:
-        if current['proposal'] != proposal:
+        if current['proposal'] == proposal:
+            return current
+        if expected_proposal is None:
             raise ValueError('Request already has another proposal')
-        return current
     if not isinstance(proposal['draftId'], str) or not re.fullmatch('[a-f0-9]{64}', proposal['draftId']):
         raise ValueError('Invalid proposal draft')
     if not isinstance(proposal['extensionId'], str) or not re.fullmatch('[a-z0-9][a-z0-9_-]{0,63}', proposal['extensionId']):

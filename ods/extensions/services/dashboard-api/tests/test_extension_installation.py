@@ -5,6 +5,43 @@ from unittest.mock import Mock
 
 import pytest
 
+from extension_installation import verify_failed_attempt, retire_failed_attempt
+
+
+@pytest.mark.parametrize('state', ['accepted', 'running', 'uncertain', 'succeeded', None])
+def test_revision_never_retires_nonfailed_attempt(tmp_path, state):
+    journal = InstallationJournal(tmp_path / 'journal.json')
+    saved = {'action':'install', 'state':'accepted', 'operationId':'a'*32}
+    journal.records['app'] = saved.copy(); journal.save()
+    observe = Mock(return_value={'service_id':'app', 'operation_id':'a'*32, 'state':state})
+    with pytest.raises(ValueError): retire_failed_attempt(journal, 'app', saved, observe)
+    assert InstallationJournal(journal.path).records['app'] == saved
+
+
+def test_revision_retires_only_matching_failed_attempt_and_preserves_peers(tmp_path):
+    journal = InstallationJournal(tmp_path / 'journal.json')
+    saved = {'action':'install', 'state':'accepted', 'operationId':'a'*32}
+    peer = {'action':'install', 'state':'uncertain', 'operationId':'b'*32}
+    journal.records = {'app': saved.copy(), 'peer': peer.copy()}; journal.save()
+    observe = Mock(return_value={'service_id':'app', 'operation_id':'a'*32, 'state':'failed'})
+    assert verify_failed_attempt(journal, 'app', observe) == saved
+    for invalid in [None, {}, {'service_id':'peer', 'operation_id':'a'*32, 'state':'failed'},
+                    {'service_id':'app', 'operation_id':'b'*32, 'state':'failed'}]:
+        with pytest.raises(ValueError): retire_failed_attempt(journal, 'app', saved, lambda *args: invalid)
+    with pytest.raises(ValueError): retire_failed_attempt(journal, 'app', peer, observe)
+    retire_failed_attempt(journal, 'app', saved, observe)
+    assert InstallationJournal(journal.path).records == {'peer':peer}
+    with pytest.raises(ValueError): retire_failed_attempt(journal, 'app', saved, observe)
+
+
+def test_revision_observation_failure_does_not_clear_attempt(tmp_path):
+    journal = InstallationJournal(tmp_path / 'journal.json')
+    saved = {'action':'install', 'state':'uncertain', 'operationId':'a'*32}
+    journal.records['app'] = saved.copy(); journal.save()
+    with pytest.raises(TimeoutError):
+        retire_failed_attempt(journal, 'app', saved, Mock(side_effect=TimeoutError()))
+    assert InstallationJournal(journal.path).records == {'app':saved}
+
 from extension_installation import InstallationJournal, advance_installation
 from extension_install_plan import build_install_plan
 from routers import extensions

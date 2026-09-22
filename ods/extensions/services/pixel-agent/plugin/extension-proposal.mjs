@@ -79,7 +79,7 @@ export function createSourceProposalTool(context, dependencies = {}) {
   if (!proposal) return null;
   return {
     name:'pixel_ods_source_proposal', label:'Propose source application',
-    description:'Save a researched GitHub application recipe for this conversation. Supply the build method and real verification command; never invent them. CLI projects have runtime=cli and port=0. HTTP services have runtime=http, their actual port, and healthPath. This saves a proposal, never installs. Advanced multi-service recipes remain available through pixel_ods_extension_proposal.',
+    description:'Save a researched GitHub application recipe for this conversation. Supply the build method and real verification command; never invent them. CLI projects have runtime=cli and port=0. HTTP services have runtime=http, their actual port, and healthPath. This saves a proposal, never installs. After an observed installation failure, submit a corrected recipe with the same repository and serviceId to revise this request; ODS verifies the failed attempt and preserves application data. Active or uncertain attempts cannot be replaced. Advanced multi-service recipes remain available through pixel_ods_extension_proposal.',
     parameters:{type:'object',additionalProperties:false,
       required:['repository','commit','serviceId','name','buildKind','buildDefinition','runtime','port','verificationCommand'],
       properties:{

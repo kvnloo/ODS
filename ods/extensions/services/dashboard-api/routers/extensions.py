@@ -1760,11 +1760,169 @@ async def extension_github_request_proposal(request: Request, api_key: str = Dep
                 draft = save_draft(drafts, api_key, candidate, validation)
             return bind_proposal(directory, api_key, payload['chatId'], payload['requestId'],
                                  candidate, validation, draft)
+    def perform():
+        # Same ordering as advance: coordinator, lifecycle, request mutation.
+        parent = _extensions_lock_path().parent.resolve()
+        operations = parent / '.extension-installations'
+        if operations.is_symlink():
+            raise ValueError('Invalid installation journal directory')
+        operations.mkdir(exist_ok=True)
+        lock = operations / 'coordinator.lock'
+        if lock.is_symlink():
+            raise ValueError('Invalid installation coordinator lock')
+        with _exclusive_file_lock(lock):
+            with _extensions_lock():
+                current = read_request(parent / '.extension-requests', api_key,
+                    payload['chatId'], payload['requestId'])
+            bound = current.get('proposal')
+            candidate = payload['candidate']
+            if (bound and isinstance(candidate, dict)
+                    and isinstance(candidate.get('manifest'), dict)
+                    and isinstance(candidate['manifest'].get('service'), dict)
+                    and candidate.get('manifest', {}).get('service', {}).get('id') == bound['extensionId']
+                    and (EXTENSIONS_LIBRARY_DIR / bound['extensionId']).exists()
+                    and (bound['recipeDigest'] != recipe_digest(candidate)
+                         or (operations / (current['id'] + '.revision.json')).exists())):
+                with _extension_operation_lock(bound['extensionId']), _extensions_lock():
+                    return _revise_extension_request(payload, api_key, loop, operations)
+            return bind()
+
     try:
-        result = await asyncio.to_thread(bind)
+        result = await asyncio.to_thread(perform)
     except (ValueError, OSError, TypeError, KeyError):
         raise HTTPException(status_code=409, detail='Proposal does not match an active extension request') from None
     return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+def _revise_extension_request(payload, api_key, loop, operations):
+    """Revise only a failed, owner-bound imported recipe; never dispatch here.
+
+    Caller holds coordinator, service lifecycle and extension mutation locks.
+    The durable file journal also retains bindings and the retired attempt so
+    a lost response or interrupted write can reconcile without a second install.
+    """
+    from extension_requests import read_request, bind_proposal
+    from extension_recipe_drafts import read_draft, save_draft
+    from extension_recipe_package import recipe_digest, verify_package, publish_package
+    from extension_recipe_revision import (stage_revision, read_revision_context,
+                                           commit_bound_revision)
+    from extension_installation import InstallationJournal, verify_failed_attempt
+    from extension_github import inspect_repository, inspect_file
+    from extension_source_build import inspect_source_builds
+
+    parent = operations.parent
+    requests, drafts = parent / '.extension-requests', parent / '.extension-recipe-drafts'
+    candidate = payload['candidate']
+
+    def current_request():
+        value = read_request(requests, api_key, payload['chatId'], payload['requestId'])
+        if value['state'] != 'pending' or value.get('integration'):
+            raise ValueError('Request is no longer active')
+        return value
+
+    current = current_request()
+    old = current['proposal']
+    identifier = old['extensionId']
+    _validate_service_id(identifier)
+    _assert_not_core(identifier)
+    if (EXTENSIONS_DIR / identifier).exists():
+        raise ValueError('Built-in recipes cannot be revised')
+    journal_path = operations / (current['id'] + '.revision.json')
+    directories = {'library': EXTENSIONS_LIBRARY_DIR / identifier,
+                   'user': USER_EXTENSIONS_DIR / identifier}
+    attempts = InstallationJournal(operations / 'journal.json')
+
+    def observe(service_id, operation_id):
+        progress = _read_progress(service_id)
+        if (not isinstance(progress, dict) or progress.get('status') != 'error'
+                or progress.get('operation_id') != operation_id):
+            raise ValueError('Installation progress no longer matches this failed attempt')
+        response = request_agent_json('GET',
+            f'/v1/extension/operation?service_id={service_id}&operation_id={operation_id}',
+            timeout=_AGENT_TIMEOUT)
+        return response.get('operation') if isinstance(response, dict) else None
+
+    def on_loop(awaitable):
+        future = asyncio.run_coroutine_threadsafe(awaitable, loop)
+        try:
+            return future.result(timeout=120)
+        except TimeoutError:
+            future.cancel()
+            raise ValueError('Recipe inspection did not complete') from None
+
+    if journal_path.exists() or journal_path.is_symlink():
+        context = read_revision_context(journal_path)
+        if (set(context) != {'requestId', 'old', 'new', 'attempt', 'validation', 'draft'}
+                or context['requestId'] != current['id']
+                or context['new']['recipeDigest'] != recipe_digest(candidate)
+                or context['new']['extensionId'] != identifier
+                or read_draft(drafts, api_key, context['new']['draftId']) != candidate):
+            raise ValueError('Another recipe revision requires reconciliation')
+        old = context['old']
+    else:
+        expected = verify_failed_attempt(attempts, identifier, observe)
+        previous = read_draft(drafts, api_key, old['draftId'])
+        if recipe_digest(previous) != old['recipeDigest'] or candidate['repository'] != previous['repository']:
+            raise ValueError('Recipe revision changed repository')
+        verify_package(directories['library'], previous)
+        # Only installer-created definitions qualify. Extra owner data is not
+        # copied, deleted or compared against the pristine package.
+        for name in ('manifest.yaml', 'compose.yaml', 'upstream.json'):
+            actual = directories['user'] / name
+            expected_file = directories['library'] / name
+            if (directories['user'].is_symlink() or actual.is_symlink() or not actual.is_file()
+                    or actual.stat().st_size != expected_file.stat().st_size
+                    or actual.read_bytes() != expected_file.read_bytes()):
+                raise ValueError('Installed recipe was changed outside this request')
+        validation = on_loop(_validated_github_recipe(candidate, api_key, replacing=identifier))
+        if validation.get('valid') is not True:
+            raise HTTPException(status_code=422, detail={
+                'code': 'recipe-validation-failed', 'errors': validation['errors'],
+                'existingExtensionIds': validation.get('existingExtensionIds', [])})
+
+        async def inspect():
+            evidence = await inspect_repository(candidate['repository'], EXTENSIONS_LIBRARY_DIR,
+                existing_roots=(USER_EXTENSIONS_DIR, EXTENSIONS_DIR), revision=candidate['commit'])
+            evidence['existingExtensionIds'] = [item for item in evidence['existingExtensionIds'] if item != identifier]
+            evidence['sourceFiles'] = await inspect_source_builds(candidate, inspect_file)
+            return evidence
+
+        import httpx
+        try:
+            evidence = on_loop(inspect())
+        except httpx.HTTPError:
+            raise ValueError('Repository evidence is unavailable') from None
+        draft_lock = drafts / '.drafts.lock'
+        if draft_lock.is_symlink():
+            raise ValueError('Invalid draft lock')
+        with _exclusive_file_lock(draft_lock):
+            draft = save_draft(drafts, api_key, candidate, validation)
+        new = {'extensionId': identifier, 'draftId': draft['draftId'], 'recipeDigest': draft['recipeDigest']}
+        with tempfile.TemporaryDirectory(prefix='.revision-package-', dir=operations) as temporary:
+            staging = Path(temporary)
+            publish_package(staging, candidate, validation, evidence)
+            package = staging / identifier
+            files = {name: (package / name).read_bytes()
+                     for name in ('manifest.yaml', 'compose.yaml', 'upstream.json')}
+            source_digest = _extension_tree_digest(package)
+            _write_library_receipt(package, source_digest=source_digest, installed_digest=source_digest)
+            user_files = {**files, '.ods-library-receipt.json': (package / '.ods-library-receipt.json').read_bytes()}
+            context = {'requestId': current['id'], 'old': old, 'new': new,
+                       'attempt': expected, 'validation': validation, 'draft': draft}
+            stage_revision(journal_path, directories, {'library': files, 'user': user_files}, context=context)
+
+    def bind_new():
+        return bind_proposal(requests, api_key, payload['chatId'], payload['requestId'],
+            candidate, context['validation'], context['draft'], expected_proposal=old)
+
+    commit_bound_revision(journal_path, directories, attempts, identifier, context['attempt'],
+        old, context['new'], lambda: current_request()['proposal'], bind_new, observe)
+    for directory in directories.values():
+        _invalidate_extension_digest_cache(directory)
+    # Files, binding and retirement are now committed. The immutable drafts and
+    # host receipt remain available; replay recovers the new binding normally.
+    journal_path.unlink()
+    return current_request()
 
 
 @router.post("/api/extensions/github/inspect")
@@ -1806,7 +1964,7 @@ async def extension_github_file(request: Request, api_key: str = Depends(verify_
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
-async def _validated_github_recipe(candidate, api_key):
+async def _validated_github_recipe(candidate, api_key, *, replacing=None):
     from extension_recipe_validation import validate_recipe
     from extension_github import existing_recipes, repository_identity
     try:
@@ -1822,6 +1980,13 @@ async def _validated_github_recipe(candidate, api_key):
                 reserved.update(path.name for path in root.iterdir())
         repository = repository_identity(candidate.get('repository')) if isinstance(candidate, dict) else None
         matches = existing_recipes(repository, *roots) if repository else []
+        if replacing is not None:
+            # Only the locked revision coordinator supplies this identity after
+            # verifying the owner, old package and exact failed host attempt.
+            if replacing in CORE_SERVICE_IDS or (EXTENSIONS_DIR / replacing).exists():
+                raise ValueError('Built-in recipes cannot be revised')
+            reserved.discard(replacing)
+            matches = [identifier for identifier in matches if identifier != replacing]
 
         def scan(path):
             try:
