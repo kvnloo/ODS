@@ -89,7 +89,6 @@ import {
   WEB_FETCH_PUBLIC_ONLY_REASON,
   WEB_LOOP_ABORT_REASON,
   WEB_LOOP_DELIVERY_REASON,
-  WORKSPACE_PREVIEW_REQUIRES_TOOL_REASON,
   WORKSPACE_PREVIEW_NOT_CREATED_DELIVERY_PREFIX,
   WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX,
   WORKSPACE_PREVIEW_PUBLISHED_DELIVERY_PREFIX,
@@ -10995,9 +10994,7 @@ test("requires the model to author a game before publication", () => {
       },
     },
   });
-  assert.equal(setupOnly.block, true);
-  assert.match(setupOnly.blockReason, /id write/);
-  assert.match(setupOnly.blockReason, /breakout\/index\.html/);
+  assert.notEqual(setupOnly?.block, true);
 
   const generated = call(guard, "tool_call", {
     event: {
@@ -11763,7 +11760,7 @@ test("permits an explicitly requested preview after inspecting an existing site"
   );
 });
 
-test("blocks sandbox web servers and requires the verified preview tool", () => {
+test("sandbox testing servers do not establish a verified preview", () => {
   const guard = createToolLoopGuard();
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
@@ -11781,8 +11778,7 @@ test("blocks sandbox web servers and requires the verified preview tool", () => 
   const server = call(guard, "exec", {
     event: { params: { command: "python3 -m http.server 3000 &" } },
   });
-  assert.equal(server.block, true);
-  assert.equal(server.blockReason, WORKSPACE_PREVIEW_REQUIRES_TOOL_REASON);
+  assert.notEqual(server?.block, true);
   assert.match(
     guard.beforeAgentFinalize(
       { runId: "run-1", lastAssistantMessage: "It is running." },
@@ -11794,7 +11790,7 @@ test("blocks sandbox web servers and requires the verified preview tool", () => 
   assert.equal(reply(guard).payload.text, WORKSPACE_PREVIEW_UNVERIFIED_DELIVERY_PREFIX);
 });
 
-test("turns a setup-only preview mkdir into an immediate bounded write correction", () => {
+test("preview preparation permits mkdir without claiming publication", () => {
   const guard = createToolLoopGuard();
   guard.observeRun(
     { agentId: "pixel", runId: "run-1", sessionId: "session-1" },
@@ -11812,14 +11808,7 @@ test("turns a setup-only preview mkdir into an immediate bounded write correctio
       },
     },
   });
-  assert.equal(mkdir.block, true);
-  assert.match(mkdir.blockReason, /id write/);
-  assert.match(mkdir.blockReason, /demo-interactive\/index\.html/);
-  assert.match(mkdir.blockReason, /authored entirely by the active model/);
-  assert.match(mkdir.blockReason, /local assets inside that artifact directory/);
-  assert.match(mkdir.blockReason, /ODS supplies no creative bytes/);
-  assert.doesNotMatch(mkdir.blockReason, /<!doctype html>/);
-  assert.doesNotMatch(mkdir.blockReason, /under 7000 characters/);
+  assert.notEqual(mkdir?.block, true);
   assert.equal(
     reply(guard).payload.text,
     WORKSPACE_PREVIEW_NOT_CREATED_DELIVERY_PREFIX
@@ -15023,5 +15012,28 @@ test("repeated writes allow a different repair but remain bounded by actual fail
       assert.equal(different.blockReason, RUN_PROGRESS_STOP_REASON,
         "four consecutive failed results exhaust the shared budget");
     }
+  }
+});
+
+
+test("preview testing servers retain process tracking without granting publication", () => {
+  for (const wrapped of [false, true]) {
+    const guard = createToolLoopGuard();
+    guard.observeRun({agentId: "pixel", runId: "run-1", sessionId: "session-1"}, "pixel", {
+      prompt: "Build and show a website, testing it before publication.",
+    });
+    const invoke = (name, args) => wrapped
+      ? call(guard, "tool_call", {event: {params: {id: name, args}}})
+      : call(guard, name, {event: {params: args}});
+    const args = {command: "npm run dev", background: true, workdir: "/workspace/site"};
+    assert.notEqual(invoke("exec", args)?.block, true);
+    afterCall(guard, "exec", {event: {params: args, result: {
+      details: {status: "running", sessionId: "preview-server"},
+    }}});
+    assert.equal(invoke("exec", args).blockReason, PENDING_EXEC_REQUIRES_POLL_REASON);
+    assert.notEqual(invoke("process", {action: "poll", sessionId: "preview-server"})?.block, true);
+    assert.notEqual(invoke("process", {action: "kill", sessionId: "preview-server"})?.block, true);
+    assert.notEqual(guard.verificationStatus("run-1"), "passed");
+    assert.doesNotMatch(reply(guard).payload.text, /http:\/\/localhost/);
   }
 });

@@ -33,7 +33,7 @@ test('every model contract distinguishes page reads from authorized execution an
   }
 });
 
-test("requires novel model-authored files for every requested browser visual", () => {
+test("preview guidance preserves project planning and requires publication evidence", () => {
   const preview = promptContractForAgent(
     { agentId: "pixel", contextTokenBudget: 65536 },
     "pixel",
@@ -47,12 +47,12 @@ test("requires novel model-authored files for every requested browser visual", (
     preview.appendSystemContext,
     `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
   );
-  assert.match(preview.appendSystemContext, /first tool step call tool_call with id write/);
   assert.match(preview.appendSystemContext, /pixel_ods_workspace_preview/);
-  assert.match(preview.appendSystemContext, /Design and write every creative line/);
+  assert.match(ODS_WORKSPACE_PREVIEW_CONTRACT, /no first tool or fixed sequence/);
+  assert.match(ODS_WORKSPACE_PREVIEW_CONTRACT, /Preserve existing source files and the requested framework/);
+  assert.match(ODS_WORKSPACE_PREVIEW_CONTRACT, /does not establish a URL reachable by the owner/);
+  assert.doesNotMatch(ODS_WORKSPACE_PREVIEW_CONTRACT, /first tool step|Do not call exec|Only after.*may you reply/);
   assert.match(preview.appendSystemContext, /ODS supplies no creative artifact bytes/);
-  assert.match(preview.appendSystemContext, /local CSS, JavaScript, SVG, or data files inside that artifact directory/);
-  assert.match(preview.appendSystemContext, /you write yourself in subsequent tool steps before publication/);
   assert.doesNotMatch(preview.appendSystemContext, /under 7000 characters/);
   assert.doesNotMatch(preview.appendSystemContext, /<!doctype html>/i);
   assert.doesNotMatch(preview.appendSystemContext, /scaffold with|template breakout|Do not generate HTML/);
@@ -67,9 +67,6 @@ test("requires novel model-authored files for every requested browser visual", (
     custom.appendSystemContext,
     `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
   );
-  assert.match(custom.appendSystemContext, /first tool step call tool_call with id write/);
-  assert.match(custom.appendSystemContext, /self-contained document is welcome when it fits naturally/);
-  assert.match(custom.appendSystemContext, /Do not use external CDNs, remote assets/);
   assert.match(custom.appendSystemContext, /semantic interactive elements such as button/);
   assert.match(custom.appendSystemContext, /responsive layout/);
   assert.match(custom.appendSystemContext, /keyboard access/);
@@ -114,8 +111,6 @@ test("requires novel model-authored files for every requested browser visual", (
     breakout.appendSystemContext,
     `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
   );
-  assert.match(breakout.appendSystemContext, /first tool step call tool_call with id write/);
-  assert.match(breakout.appendSystemContext, /Design and write every creative line/);
   assert.doesNotMatch(breakout.appendSystemContext, /template breakout|host generates/);
 
   for (const visual of [
@@ -133,7 +128,6 @@ test("requires novel model-authored files for every requested browser visual", (
       result.appendSystemContext,
       `${ODS_COMPACT_CONVERSATION_CONTRACT} ${ODS_WORKSPACE_PREVIEW_CONTRACT}`
     );
-    assert.match(result.appendSystemContext, /Design and write every creative line/);
     assert.doesNotMatch(result.appendSystemContext, /scaffold|template (?:voxel|animated-svg|task-board)/);
   }
 

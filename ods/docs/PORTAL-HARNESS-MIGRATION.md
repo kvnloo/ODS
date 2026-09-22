@@ -434,3 +434,26 @@ This qualifies recovery and these two behaviors, not general CSV parsing (the mo
 still uses string splitting), arbitrary tasks, or extension installation. The live
 continuation did not itself repeat two no-op writes; that exact recovery-policy
 branch is covered by the regression test, not by a claimed causal live comparison.
+
+### Preview implementation choices separate from publication evidence
+
+Removed the prompt's mandatory first `write`, prohibition on project commands,
+and guard interception of standalone `mkdir` and development-server commands.
+Preview guidance now preserves the requested framework and source, allows model-
+selected inspection/build/testing, and explains the static publisher's actual
+capability. It does not turn a sandbox server into an owner-accessible URL or
+permit claiming interactions from static readback. Existing publication receipt
+and artifact validation remain unchanged.
+
+540 guard tests plus 28 prompt tests pass. Coverage admits direct/wrapped server
+execution while preserving exact pending-process tracking, duplicate-launch
+refusal, process poll/kill admission, and absence of publication evidence. Applied
+the exact two-file patch to the idle local WSL plugin and restarted the gateway.
+
+Code inspection confirms `PortalWorkspace.jsx` currently exposes preview/review/
+files/subagents, with no process list or server stop action. The existing execution
+session tracking is not a durable project-server lifecycle API. Remaining work
+includes scoped process registration/status/logs/stop, authoritative terminal
+reconciliation across disconnects, and a controlled preview route to isolated
+servers. Dependency acquisition is still constrained by the sandbox's network-none
+configuration. Static-preview success must not be called Next.js qualification.

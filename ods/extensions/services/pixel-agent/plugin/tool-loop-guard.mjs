@@ -161,8 +161,6 @@ export const CANCELLABLE_EXEC_UNAVAILABLE_REASON =
 export const EXEC_ARGUMENTS_REQUIRE_COMMAND_REASON =
   "The exec command was not a non-empty string, so nothing was executed. Retry with command containing the shell text and workdir as a separate field, not an object inside command. For tool_call, use id exec and args containing those fields. Do not change the intended command or its authority.";
 
-export const WORKSPACE_PREVIEW_REQUIRES_TOOL_REASON =
-  "A server started inside Pixel's disposable sandbox is not reachable from the owner's browser. Do not start python http.server, npm dev, Vite, or another background server and do not claim any localhost port. Finish the static files, then call pixel_ods_workspace_preview with their one workspace-relative directory; share only its independently verified URL.";
 
 export const WORKSPACE_PREVIEW_REQUIRES_FILES_REASON =
   "Pixel cannot publish this website yet because this response has not created or inspected an index.html in the requested workspace directory. Create the static site files first, then call pixel_ods_workspace_preview with that one relative directory.";
@@ -4308,49 +4306,6 @@ function requestsRecursiveForcedDelete(params) {
   return false;
 }
 
-function execLaunchesWorkspaceServer(params) {
-  if (!params || typeof params !== "object" || Array.isArray(params)) return false;
-  const command = params.command;
-  if (typeof command !== "string" || !command.trim()) return false;
-  return (
-    /\bpython(?:3(?:\.\d+)?)?\s+-m\s+http\.server\b/i.test(command) ||
-    /\b(?:npx|pnpm\s+dlx|bunx)\s+(?:--yes\s+)?(?:vite|serve|http-server)\b/i.test(command) ||
-    /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:dev|start|serve|preview)\b/i.test(command) ||
-    /\b(?:vite|next\s+dev|astro\s+dev|hugo\s+server|jekyll\s+serve)\b/i.test(command)
-  );
-}
-
-function workspacePreviewMkdirDirectory(params) {
-  if (!params || typeof params !== "object" || Array.isArray(params)) return undefined;
-  const command = params.command;
-  if (typeof command !== "string" || !command.trim()) return undefined;
-  const match = command.trim().match(
-    /^mkdir\s+-p\s+(?:--\s+)?(?:"([^"\r\n]+)"|'([^'\r\n]+)'|([^\s;&|><`$()]+))$/i
-  );
-  if (!match) return undefined;
-  const rawDirectory = match[1] ?? match[2] ?? match[3];
-  const absoluteWorkspacePath = rawDirectory.startsWith("/workspace/");
-  if (
-    !absoluteWorkspacePath &&
-    normalizeExecWorkdir(params.workdir ?? ".") !== "."
-  ) {
-    return undefined;
-  }
-  const directory = normalizeWorkspaceFilePath(rawDirectory);
-  const parts = typeof directory === "string" ? directory.split("/") : [];
-  if (
-    parts.length === 0 ||
-    parts.length > 16 ||
-    parts.some(
-      (part) =>
-        ["", ".", ".."].includes(part) || !WORKSPACE_PATH_COMPONENT.test(part)
-    )
-  ) {
-    return undefined;
-  }
-  return directory;
-}
-
 // Keep status UI elements separate from requests for platform facts.
 function statusKeywordIsUiNounPhrase(clause, keywordIndex, keywordLen) {
   const uiWords =
@@ -7120,28 +7075,6 @@ export function createToolLoopGuard({
         state.codingExhausted = true;
         state.codingTerminalBlocks = 1;
         return { block: true, blockReason: FOCUSED_EDIT_RETRY_EXHAUSTED_REASON };
-      }
-      if (
-        state.workspacePreviewRequired &&
-        selectedToolName === "exec" &&
-        execLaunchesWorkspaceServer(selectedParams)
-      ) {
-        return { block: true, blockReason: WORKSPACE_PREVIEW_REQUIRES_TOOL_REASON };
-      }
-      const setupDirectory =
-        state.workspacePreviewRequired && selectedToolName === "exec"
-          ? workspacePreviewMkdirDirectory(selectedParams)
-          : undefined;
-      if (setupDirectory) {
-        return {
-          block: true,
-          blockReason:
-            "Pixel does not need a separate directory-preparation command for this preview. " +
-            `Call tool_call now with id write and path "${setupDirectory}/index.html" plus ` +
-            "HTML authored entirely by the active model. Use a polished self-contained document, " +
-            "or write any local assets inside that artifact directory before calling " +
-            "pixel_ods_workspace_preview for that directory. ODS supplies no creative bytes.",
-        };
       }
       rememberToolRun(
         context?.toolCallId ?? event?.toolCallId,
