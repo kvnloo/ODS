@@ -89,6 +89,7 @@ def test_cli_running_is_not_a_successful_one_shot_exit(monkeypatch):
 
 @pytest.mark.parametrize('build_exit', [0, 1])
 def test_install_prepares_only_dependency_images_and_surfaces_build_failure(monkeypatch, build_exit):
+    monkeypatch.setenv('BUILD_TEST_TOKEN', 'private')
     monkeypatch.setattr(_mod.platform, 'system', lambda: 'Linux')
     config = {'services': {
         'demo': {'build': {'context': 'https://github.com/example/demo.git#' + 'a' * 40},
@@ -107,10 +108,35 @@ def test_install_prepares_only_dependency_images_and_surfaces_build_failure(monk
     ok, error = _mod._prepare_install_images(['-p', 'ods'], 'demo')
     assert ok is (build_exit == 0)
     assert 'private' not in error
+    if build_exit:
+        assert '[REDACTED] build output' in error
     base = ['docker', 'compose', '-p', 'ods']
     assert calls == [base + ['config', '--format', 'json'], base + ['pull', 'demo-db'],
                      base + ['build', 'demo', 'demo-worker']]
     assert progress[-1][2] == 'Building images from source...'
+
+
+def test_build_diagnostic_preserves_actual_pip_failure_and_redacts_before_tail(tmp_path, monkeypatch):
+    monkeypatch.setattr(_mod, 'INSTALL_DIR', tmp_path)
+    (tmp_path / '.env').write_text('SERVICE_API_KEY=persisted-value\n')
+    monkeypatch.setenv('BUILD_TEST_TOKEN', 'process-value')
+    services = {'demo': {'environment': {'PASSWORD': 'compose-value'},
+                         'build': {'args': {'ACCESS_TOKEN': 'build-value'}}}}
+    failure = "ERROR: Directory '.' is not installable. Neither 'setup.py' nor 'pyproject.toml' found."
+    output = ('x' * 4000 + '\nprocess-value persisted-value compose-value build-value\n'
+              'https://user:pass@example.org/repo?token=query-value\nBearer bearer-value\n' + failure)
+    actual = _mod._install_build_diagnostic(types.SimpleNamespace(stderr=output), services)
+    assert actual.endswith(failure)
+    assert len(actual) <= 1500
+    for secret in ['process-value', 'persisted-value', 'compose-value', 'build-value',
+                   'user:pass', 'query-value', 'bearer-value']:
+        assert secret not in actual
+
+
+def test_build_diagnostic_supports_stdout_and_absent_output(tmp_path, monkeypatch):
+    monkeypatch.setattr(_mod, 'INSTALL_DIR', tmp_path)
+    assert _mod._install_build_diagnostic(types.SimpleNamespace(stderr='', stdout='failed step'), {}) == 'failed step'
+    assert 'No build diagnostic' in _mod._install_build_diagnostic(types.SimpleNamespace(), {})
 
 
 @pytest.mark.parametrize('build_exit', [0, 1])

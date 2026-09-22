@@ -7303,6 +7303,47 @@ def _build_install_sources(base, builds, services):
          *sorted(builds)], input=compiled.stdout, **options)
 
 
+def _install_build_diagnostic(result, services: dict) -> str:
+    """Bound untrusted build evidence and remove configured credential values.
+
+    Redact before truncating so a tail cannot expose part of a credential.
+    Never include the resolved Compose configuration or build plan.
+    """
+    output = str(getattr(result, 'stderr', '') or '')
+    if not output.strip():
+        output = str(getattr(result, 'stdout', '') or '')
+    secrets = set()
+    sensitive = re.compile(r'(?i)(secret|token|password|passwd|credential|api.?key|private.?key|authorization)')
+    def collect(values):
+        if isinstance(values, dict):
+            for key, value in values.items():
+                if sensitive.search(str(key)) and isinstance(value, str) and value:
+                    secrets.add(value)
+    collect(dict(os.environ))
+    try:
+        collect(load_env(INSTALL_DIR / '.env'))
+    except (OSError, UnicodeError):
+        # Do not disclose output if persisted credentials cannot be checked.
+        return 'Build diagnostics unavailable: credential redaction could not be completed.'
+    for definition in services.values():
+        if not isinstance(definition, dict):
+            continue
+        collect(definition.get('environment'))
+        build = definition.get('build')
+        if isinstance(build, dict):
+            collect(build.get('args'))
+    output = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', output)
+    if secrets:
+        output = re.sub('|'.join(re.escape(value) for value in sorted(secrets, key=len, reverse=True)),
+                        '[REDACTED]', output)
+    output = re.sub(r'(?i)(bearer\s+)[^\s\x22\x27]+', r'\1[REDACTED]', output)
+    output = re.sub(r'([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s@]+@', r'\1[REDACTED]@', output)
+    output = re.sub(r'(?im)((?:[\w-]*(?:token|password|passwd|secret|api[_-]?key|credential)[\w-]*)[\x22\x27]?\s*[:=]\s*)(?:\x22[^\x22]*\x22|\x27[^\x27]*\x27|[^\s,;]+)',
+                    r'\1[REDACTED]', output)
+    output = ''.join(c for c in output if c in '\n\t' or ord(c) >= 32).strip()
+    return output[-1500:] or 'No build diagnostic output was returned.'
+
+
 def _prepare_install_images(flags: list[str], service_id: str) -> tuple[bool, str]:
     """Prepare only the requested service's effective Compose dependency graph.
 
@@ -7358,7 +7399,9 @@ def _prepare_install_images(flags: list[str], service_id: str) -> tuple[bool, st
         _write_progress(service_id, "pulling", "Building images from source...")
         result = _build_install_sources(base, builds, services)
         if result.returncode:
-            return False, "Source image build failed; containers were not started"
+            return False, ("Source image build failed; containers were not started. "
+                           "Untrusted build diagnostic (tail):\n" +
+                           _install_build_diagnostic(result, services))
     return True, ""
 
 

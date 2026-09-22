@@ -623,3 +623,18 @@ The validator now accepts the bounded integration guidance contract for inspect 
 Validation: 547 guard tests passed under Linux/WSL, including five new contract cases. Windows passed 546 but its existing POSIX execution-marker test cannot establish Unix custody; the Linux run passed that case. Applied the precise validator change to the live plugin with a backup. Retested through Portal with the original 4B/32768: the model called inspect with the correct ID and returned the observed error/blocked state; the harness accepted and appended the matching read receipt. No installation success is claimed.
 
 Further diagnosis: both 4B and 27B produced correct arguments in short direct calls; streaming also preserved the 4B argument. The old long conversation continued producing empty fields, while a new conversation could inspect correctly with a follow-up. Returning from 27B hit a Windows Lemonade child ownership rejection; process ancestry was verified before stopping that managed runtime and restoring 4B via the normal activation API. The automatic restart ownership race still needs investigation. Imported-repository discovery is also absent from the static broker catalog. These are remaining limitations, not evidence that arbitrary GitHub installation is complete.
+
+### Verified build failure diagnosis (2026-09-22)
+
+Read-only recovery of BuildKit history `42z6p9zaknk9v56amj5v8xcdw` identified the actual failure for `hermes-jev-skills-installation-guide`, operation `8a560dfa3e05449ecaeaf26cbec6dc4e`, pinned commit `7022efa5e30cceb6ae14bc106cf57bce6cbb3240`:
+
+```
+RUN python -m pip install --no-cache-dir . && python -m pip check
+ERROR: Directory '.' is not installable. Neither 'setup.py' nor 'pyproject.toml' found.
+```
+
+The Git source fetched successfully. The proposed recipe incorrectly assumed a pip-installable project. Its runtime command merely imports `install`; that is also insufficient evidence that skills were installed or connected to Pixel. Upstream provides `install.py` with `--check`, `--skills-dir`, `--hermes-home`, and `--enable`; its default discovers other agents, so running it indiscriminately would not establish an ODS-scoped integration. Jev functionality also requires external TypeSafe credentials, independently of copying skills.
+
+A separate harness defect remains: `_prepare_install_images` captures the failed build output but returns only a generic summary. The next implementation should expose bounded, credential-redacted, operation-bound diagnostics to the model, then permit an evidence-backed recipe revision through the existing revision path. Do not silently replace the error state with a successful inspection or create a placeholder container. No install/retry or host-agent configuration changes were performed during this diagnosis.
+
+Implemented and deployed bounded build diagnostics in the Windows host agent. Failed image builds now propagate the redacted diagnostic tail through the existing operation-associated progress error to request status, instead of discarding subprocess output. Redaction runs before truncation; persisted/process credentials and Compose environment/build argument secrets are removed. The diagnostic is explicitly untrusted and does not change execution authority. Thirteen focused host-agent tests passed. A replay of the real retained BuildKit output through the deployed helper preserved the exact missing setup.py/pyproject.toml error. The running host agent was restarted while Pixel was idle; the selected 4B model was preserved. This verifies diagnostic recovery, not a successful extension installation or autonomous recipe correction. Historical error receipts were not rewritten.
