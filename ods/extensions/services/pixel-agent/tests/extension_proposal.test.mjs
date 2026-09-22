@@ -80,6 +80,12 @@ test('request status is owner-bound, read-only and never promotes missing eviden
   assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).details.runtimeStatus,'enabled');
   value.runtimeStatus='error'; value.runtimeError='Build failed: missing pyproject.toml';
   assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).details.runtimeError,value.runtimeError);
+  const failure=await tool.execute('id',{chatId:'chat',requestId:'turn'});
+  assert.equal(JSON.parse(failure.content[1].text).serviceId,'example');
+  assert.match(JSON.parse(failure.content[1].text).workspaceScope,/do not modify the managed extension recipe/);
+  value.requestState='cancelled';
+  assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).content.length,1);
+  value.requestState='pending';
   value.runtimeError='Build output: '+ 'x'.repeat(7000);
   assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).details.runtimeError,value.runtimeError);
   for (const error of ['', null, 42, 'x'.repeat(8193)]) {
@@ -337,8 +343,12 @@ test('library description becomes catalog metadata without changing runtime veri
   assert.equal((await tool.execute('id',input)).isError,undefined);
   assert.equal(calls[0].candidate.manifest.service.description,input.description);
   assert.match(calls[0].candidate.compose.services.example.command[2],/import_module/);
-  for(const description of ['',{},'x'.repeat(601)]) assert.equal((await tool.execute('id',{...input,description})).isError,true);
-  assert.equal(calls.length,1);
+  for(const description of ['', '   ']) {
+    assert.equal((await tool.execute('id',{...input,description})).isError,undefined);
+    assert.equal(Object.hasOwn(calls.at(-1).candidate.manifest.service,'description'),false);
+  }
+  for(const description of [{},'x'.repeat(601)]) assert.equal((await tool.execute('id',{...input,description})).isError,true);
+  assert.equal(calls.length,3);
 });
 
 
