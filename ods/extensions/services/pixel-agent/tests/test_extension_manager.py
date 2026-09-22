@@ -1123,7 +1123,12 @@ class RecipeValidationTests(unittest.TestCase):
             self.assertEqual(manager._read_request_status(pathlib.Path('/unused'), 3002, json.dumps(envelope).encode()), receipt)
             self.assertEqual(request.call_args.kwargs['path'], '/api/extensions/github/requests/status')
             self.assertEqual(request.call_args.kwargs['body'], {'chatId': 'chat', 'requestId': 'turn'})
-            for change in [{'requestId': 'other'}, {'runtimeStatus': 'enabled'}, {'extensionId': '../escape'}, {'secret': 'never-return'}]:
+            for matches in [[], ['existing-a']]:
+                request.return_value = (200, {**receipt, 'existingExtensionIds': matches})
+                self.assertEqual(manager._read_request_status(pathlib.Path('/unused'), 3002, json.dumps(envelope).encode())['existingExtensionIds'], matches)
+            for change in [{'existingExtensionIds': None}, {'existingExtensionIds': ['../escape']},
+                           {'existingExtensionIds': ['same', 'same']}, {'existingExtensionIds': ['a'] * 65},
+                           {'requestId': 'other'}, {'runtimeStatus': 'enabled'}, {'extensionId': '../escape'}, {'secret': 'never-return'}]:
                 request.return_value = (200, {**receipt, **change})
                 with self.assertRaises(manager.ManagerError):
                     manager._read_request_status(pathlib.Path('/unused'), 3002, json.dumps(envelope).encode())

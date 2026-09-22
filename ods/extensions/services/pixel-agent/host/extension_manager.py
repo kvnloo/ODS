@@ -1085,8 +1085,14 @@ def _read_request_status(env_path, port, payload):
     status, value = _request_json(port=port, credential=credential, method='POST',
         path='/api/extensions/github/requests/status', timeout=25,
         body={key: envelope[key] for key in ('chatId', 'requestId')})
+    extra = {'existingExtensionIds'} if isinstance(value, dict) and 'existingExtensionIds' in value else set()
     value = _exact_object(value, {'schemaVersion', 'kind', 'chatId', 'requestId', 'requestState',
-                                  'proposalAccepted', 'prepared', 'extensionId', 'runtimeStatus'})
+                                  'proposalAccepted', 'prepared', 'extensionId', 'runtimeStatus'} | extra)
+    matches = value.get('existingExtensionIds', [])
+    if (not isinstance(matches, list) or len(matches) > 64
+            or any(not isinstance(item, str) or not SERVICE_ID.fullmatch(item) for item in matches)
+            or len(set(matches)) != len(matches)):
+        raise ManagerError('invalid repository matches')
     if (status != 200 or value['schemaVersion'] != 1 or value['kind'] != 'ods-extension-request-status'
             or any(value[key] != envelope[key] for key in ('chatId', 'requestId'))
             or value['requestState'] not in {'pending', 'cancelled', 'expired'}

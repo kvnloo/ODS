@@ -332,3 +332,31 @@ def test_session_scope_endpoint_uses_authenticated_owner(monkeypatch, tmp_path):
     assert json.loads(asyncio.run(call('stranger',payload)).body)['request'] is None
     with pytest.raises(extensions.HTTPException):
         asyncio.run(call('owner',{'sessionHash':'bad'}))
+
+
+def test_status_discovers_existing_repository_without_binding_or_installing(monkeypatch, tmp_path):
+    from routers import extensions
+    from unittest.mock import AsyncMock
+    requests = tmp_path / '.extension-requests'; requests.mkdir()
+    roots = [tmp_path / name for name in ('user', 'built-in', 'library')]
+    for root in roots: root.mkdir()
+    create_request(requests, 'owner', 'chat', 'turn', COMMAND)
+    for identifier in ('existing-a', 'existing-b'):
+        target = roots[2] / identifier; target.mkdir()
+        (target / 'upstream.json').write_text(json.dumps({'repository': 'https://github.com/owner/repo'}))
+    # Higher-priority definitions shadow a lower-priority repository match.
+    (roots[0] / 'existing-b').mkdir()
+    monkeypatch.setattr(extensions, '_extensions_lock_path', lambda: tmp_path / '.lock')
+    for name, root in zip(('USER_EXTENSIONS_DIR', 'EXTENSIONS_DIR', 'EXTENSIONS_LIBRARY_DIR'), roots):
+        monkeypatch.setattr(extensions, name, root)
+    runtime = AsyncMock()
+    monkeypatch.setattr(extensions, 'extension_detail', runtime)
+    result = asyncio.run(extensions._observe_extension_request({'chatId': 'chat', 'requestId': 'turn'}, 'owner'))
+    assert result['existingExtensionIds'] == ['existing-a']
+    assert result['proposalAccepted'] is False and result['prepared'] is False
+    assert result['extensionId'] is None and result['runtimeStatus'] == 'not_observed'
+    assert 'proposal' not in read_request(requests, 'owner', 'chat', 'turn')
+    runtime.assert_not_awaited()
+    cancel_request(requests, 'owner', 'chat', 'turn')
+    result = asyncio.run(extensions._observe_extension_request({'chatId': 'chat', 'requestId': 'turn'}, 'owner'))
+    assert result['existingExtensionIds'] == []

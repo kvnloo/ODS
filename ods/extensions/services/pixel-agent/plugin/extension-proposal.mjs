@@ -38,7 +38,7 @@ export function createExtensionRequestStatusTool(context, {submit = submitExtens
       || !/^agent:pixel:openai-user:ods-[a-f0-9]{64}$/.test(context.sessionKey)) return null;
   return {
     name:'pixel_ods_extension_request_status', label:'Check extension request',
-    description:'Read the saved GitHub extension request and its observed managed runtime state. The adapter resolves the active request from this conversation; call with no arguments. Does not prepare, install, restart or change anything. Proposal acceptance and preparation do not establish installation success; not_observed means unknown. cli_installed establishes the configured CLI verification, not every possible application behavior.',
+    description:'Read the saved GitHub extension request and its observed managed runtime state. The adapter resolves the active request from this conversation; call with no arguments. Does not prepare, install, restart or change anything. existingExtensionIds identifies registered repository matches to inspect and reuse; it does not bind this request or authorize installation. Proposal acceptance and preparation do not establish installation success; not_observed means unknown. cli_installed establishes the configured CLI verification, not every possible application behavior.',
     parameters:{type:'object',additionalProperties:false,properties:{}},
     async execute(_id,args) {
       const unavailable={isError:true,content:[{type:'text',text:'The saved extension request could not be observed. No installation was started; its outcome remains unknown.'}]};
@@ -46,7 +46,12 @@ export function createExtensionRequestStatusTool(context, {submit = submitExtens
         args = await resolveRequestIdentity(context, args, submit);
         if (!args) return noActiveRequest();
         const value=await submit({schemaVersion:1,action:'github-request-status',...args});
-        if (!exact(value,['schemaVersion','kind','chatId','requestId','requestState','proposalAccepted','prepared','extensionId','runtimeStatus'])
+        const matches = value?.existingExtensionIds;
+        const extra = Object.hasOwn(value ?? {}, 'existingExtensionIds') ? ['existingExtensionIds'] : [];
+        if (extra.length && (!Array.isArray(matches) || matches.length > 64
+            || matches.some(x => typeof x !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(x))
+            || new Set(matches).size !== matches.length)) return unavailable;
+        if (!exact(value,['schemaVersion','kind','chatId','requestId','requestState','proposalAccepted','prepared','extensionId','runtimeStatus',...extra])
             || value.schemaVersion!==1 || value.kind!=='ods-extension-request-status'
             || value.chatId!==args.chatId || value.requestId!==args.requestId
             || !['pending','cancelled','expired'].includes(value.requestState)

@@ -496,3 +496,26 @@ commands. The existing command recognizer covers named test runners; it does not
 prove that an arbitrary Node command checks the requested JavaScript. A printed
 success sentence remains no evidence of that requirement. Replacing keyword-driven
 completion with explicit, scoped evidence remains part of the migration.
+
+### Request status exposes existing repository integrations
+
+The request-status API now returns bounded `existingExtensionIds` from the actual
+active definition roots, respecting installed/user definition precedence over
+library copies. It reports matches even without a proposal in the current chat.
+Cancelled/expired requests do not discover candidates. Matching IDs do not change
+proposalAccepted/prepared, observe runtime success, bind a recipe, or dispatch an
+installation. Manager and model adapter validate IDs, uniqueness and bounds; both
+accept the prior receipt shape for upgrade compatibility.
+
+Validation: 25 request API tests, 22 extension adapter tests, 80 manager tests with
+85 subtests passed. Coverage includes source shadowing, cancellation, malformed
+receipts and absence of proposal/runtime side effects. This stage is in the PR;
+the three-component runtime update has not been deployed locally.
+
+Remaining managed reuse work: bind a selected existing integration with immutable
+recipe identity to the current request, reject ambiguity or changed definitions,
+then advance through the same operation journal and reconcile pending outcomes.
+Discovery alone does not complete that path. Other outstanding qualification: model
+verification semantics, isolated dependency acquisition, persistent project-server
+lifecycle and Workspace stop/log controls, and native platform/GPU combinations.
+The overall harness goal remains incomplete and is not certified ready to merge.

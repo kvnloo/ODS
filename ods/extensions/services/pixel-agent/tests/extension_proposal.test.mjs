@@ -291,3 +291,20 @@ test('library description becomes catalog metadata without changing runtime veri
   for(const description of ['',{},'x'.repeat(601)]) assert.equal((await tool.execute('id',{...input,description})).isError,true);
   assert.equal(calls.length,1);
 });
+
+
+test('repository matches are bounded discovery evidence, not a prepared installation', async () => {
+  for (const matches of [[], ['existing-a'], null, ['../escape'], ['same', 'same'], Array(65).fill('a')]) {
+    const value={schemaVersion:1,kind:'ods-extension-request-status',chatId:'chat',requestId:'turn',
+      requestState:'pending',proposalAccepted:false,prepared:false,extensionId:null,
+      runtimeStatus:'not_observed',existingExtensionIds:matches};
+    const tool=createExtensionRequestStatusTool(context,{submit:async()=>value});
+    const result=await tool.execute('id',{chatId:'chat',requestId:'turn'});
+    if (matches === null || matches.length > 1 || matches[0] === '../escape') {
+      assert.equal(result.isError,true);
+    } else {
+      assert.deepEqual(result.details,value);
+      assert.equal(result.details.prepared,false);
+    }
+  }
+});

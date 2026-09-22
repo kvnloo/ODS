@@ -1629,6 +1629,15 @@ async def _observe_extension_request(payload, api_key):
                       **payload, 'requestState': current['state'],
                       'proposalAccepted': bool(current.get('proposal')), 'prepared': False,
                       'extensionId': None, 'runtimeStatus': 'not_observed'}
+            # Matches are discovery evidence, not binding or execution authority.
+            from extension_github import existing_recipes, repository_identity
+            result['existingExtensionIds'] = []
+            if current['state'] == 'pending':
+                result['existingExtensionIds'] = existing_recipes(
+                    repository_identity(current['repository']),
+                    USER_EXTENSIONS_DIR, EXTENSIONS_DIR, EXTENSIONS_LIBRARY_DIR)
+                if len(result['existingExtensionIds']) > 64:
+                    raise ValueError('Too many repository matches')
             if not current.get('proposal') or current['state'] != 'pending':
                 return result
             bound = current['proposal']
