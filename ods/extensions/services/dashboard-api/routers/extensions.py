@@ -240,6 +240,10 @@ def _cleanup_stale_progress() -> None:
     for f in progress_dir.glob("*.json"):
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
+            if data.get('status') == 'error':
+                # One record per extension, replaced by the next lifecycle
+                # action. Age does not resolve a failed attempt or its cause.
+                continue
             if data.get('status') == 'started' and data.get('exit_verified') is True:
                 continue  # Durable one-shot completion evidence, not transient progress.
             if data.get("status") == "started" and _is_stale(data.get("updated_at", ""), 900):

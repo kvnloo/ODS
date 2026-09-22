@@ -3509,7 +3509,7 @@ class TestInstallProgress:
 
     def test_stale_error_progress_preserved(self, monkeypatch, tmp_path):
         """Stale progress file with status 'error' → _read_progress still returns it (not None)."""
-        from routers.extensions import _read_progress
+        from routers.extensions import _read_progress, _cleanup_stale_progress
 
         monkeypatch.setattr("routers.extensions.DATA_DIR", str(tmp_path))
 
@@ -3525,6 +3525,7 @@ class TestInstallProgress:
         }
         (progress_dir / "my-ext.json").write_text(json.dumps(progress_data))
 
+        _cleanup_stale_progress()
         result = _read_progress("my-ext")
         assert result is not None
         assert result["status"] == "error"
