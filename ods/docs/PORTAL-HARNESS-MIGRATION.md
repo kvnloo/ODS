@@ -422,3 +422,15 @@ edit, and separately proves four consecutive failed results stop the run. Applie
 the exact plugin patch locally after idle verification and restarted the gateway.
 A natural continuation was submitted to the same 4B chat to test actual recovery;
 this unit evidence alone does not prove that the model will correct the CSV logic.
+
+Live continuation outcome: the same 4B/32768 session completed in approximately
+27 seconds, changed the program to include the first row, detected invalid numeric
+values, ran both cases, and read the program back. It made its valid fixture a
+single row rather than the requested two rows. Independent verification then
+executed the saved program inside the same sandbox container with temporary fixtures
+containing exactly `10.5,20.5\n30\n` and `5.5,abc\n`: results were `Total: 61.0`/exit 0
+and the invalid-value error/exit 1. No test code was injected into the agent's program.
+This qualifies recovery and these two behaviors, not general CSV parsing (the model
+still uses string splitting), arbitrary tasks, or extension installation. The live
+continuation did not itself repeat two no-op writes; that exact recovery-policy
+branch is covered by the regression test, not by a claimed causal live comparison.
