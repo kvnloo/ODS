@@ -520,6 +520,8 @@ def _patch_mutation_config(monkeypatch, tmp_path, lib_dir=None, user_dir=None):
                         lambda sid, *, preserve_existing=False: True)
     monkeypatch.setattr("routers.extensions._call_agent_install",
                         lambda sid, operation_id=None: True)
+    monkeypatch.setattr("routers.extensions._call_agent_hook",
+                        lambda sid, hook: True)
     monkeypatch.setattr("routers.extensions._call_agent_invalidate_compose_cache",
                         lambda: None)
     # A fixture-backed endpoint test must fail closed if a new code path tries
@@ -954,7 +956,7 @@ class TestEnableExtension:
         assert resp.status_code == 200
         data = resp.json()
         assert data["action"] == "enabled"
-        assert data["restart_required"] is True
+        assert data["restart_required"] is False
         assert (user_dir / "my-ext" / "compose.yaml").exists()
         assert not (user_dir / "my-ext" / "compose.yaml.disabled").exists()
 
