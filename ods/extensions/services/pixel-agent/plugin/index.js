@@ -308,6 +308,9 @@ export default definePluginEntry({
     api.on("model_call_ended", (event, context) =>
       toolLoopGuard.observeModelEnd(event, context, AGENT_ID)
     );
+    api.on("llm_input", (event, context) => {
+      if (!accessRuntime.isProbe(context)) contextCompaction.observeModelInput(event, context);
+    });
     api.on("llm_output", (event, context) => {
       if (!accessRuntime.isProbe(context)) {
         taskActivity.modelOutput(event, context);
