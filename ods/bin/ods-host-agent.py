@@ -6555,6 +6555,15 @@ def _read_install_operation(service_id, operation_id):
 def _save_install_operation(value):
     path = _install_operation_path(value['service_id'], value['operation_id'])
     path.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == 'posix':
+        # A newly created service directory must itself survive a crash before
+        # its receipt can be trusted as the no-replay admission record.
+        for directory in (path.parent.parent.parent, path.parent.parent):
+            directory_fd = os.open(directory, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
     fd, temporary = tempfile.mkstemp(prefix='.operation-', dir=path.parent)
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as stream:
@@ -6562,6 +6571,12 @@ def _save_install_operation(value):
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
+        if os.name == 'posix':
+            directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)

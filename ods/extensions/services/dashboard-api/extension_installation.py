@@ -47,6 +47,12 @@ class InstallationJournal:
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, self.path)
+            if os.name == 'posix':
+                directory_fd = os.open(self.path.parent, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)

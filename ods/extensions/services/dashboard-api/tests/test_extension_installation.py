@@ -1,6 +1,8 @@
 import asyncio
 import contextlib
 import json
+import os
+import stat
 from unittest.mock import Mock
 
 import pytest
@@ -43,6 +45,7 @@ def test_revision_observation_failure_does_not_clear_attempt(tmp_path):
     assert InstallationJournal(journal.path).records == {'app':saved}
 
 from extension_installation import InstallationJournal, advance_installation
+import extension_installation as installation_module
 from extension_install_plan import build_install_plan
 from routers import extensions
 
@@ -135,6 +138,33 @@ def test_journal_precedes_external_effect_and_survives_process_interruption(tmp_
     retry = Mock()
     assert advance_installation(read, InstallationJournal(path), lambda key: contextlib.nullcontext(), retry)['state'] == 'reconciliation_required'
     retry.assert_not_called()
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX directory durability barrier')
+def test_journal_directory_sync_failure_never_dispatches(tmp_path, monkeypatch):
+    path = tmp_path / 'journal.json'
+    real_fsync = os.fsync
+    directory_attempts = []
+
+    def fail_directory_sync(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            directory_attempts.append(fd)
+            raise OSError('directory sync failed')
+        return real_fsync(fd)
+
+    monkeypatch.setattr(installation_module.os, 'fsync', fail_directory_sync)
+    read = lambda: make_plan({'app': 'not_installed', 'db': 'enabled'})
+    dispatch = Mock()
+    with pytest.raises(OSError, match='directory sync failed'):
+        advance_installation(read, InstallationJournal(path),
+                             lambda key: contextlib.nullcontext(), dispatch)
+    assert directory_attempts
+    dispatch.assert_not_called()
+    monkeypatch.setattr(installation_module.os, 'fsync', real_fsync)
+    retry = advance_installation(read, InstallationJournal(path),
+                                 lambda key: contextlib.nullcontext(), dispatch)
+    assert retry['state'] == 'reconciliation_required'
+    dispatch.assert_not_called()
 
 
 def test_manual_lifecycle_change_while_waiting_for_lock_is_observed(tmp_path):

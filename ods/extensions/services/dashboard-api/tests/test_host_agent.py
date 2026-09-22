@@ -8755,6 +8755,25 @@ def test_install_operation_replay_observes_exact_failed_attempt(install_operatio
     assert len(launches) == 2  # New attempt only after a terminal observation.
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX directory durability barrier')
+def test_install_operation_directory_sync_failure_blocks_worker(install_operation_host, monkeypatch):
+    invoke, responses, launches = install_operation_host
+    real_fsync = os.fsync
+    directory_attempts = []
+
+    def fail_directory_sync(fd):
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            directory_attempts.append(fd)
+            raise OSError('directory sync failed')
+        return real_fsync(fd)
+
+    monkeypatch.setattr(_mod.os, 'fsync', fail_directory_sync)
+    invoke('d' * 32)
+    assert directory_attempts
+    assert responses[-1][0] == 409
+    assert not launches
+
+
 @pytest.mark.parametrize('terminal_state', ['failed', 'succeeded'])
 def test_install_result_is_not_terminal_until_worker_exits(tmp_path, monkeypatch, terminal_state):
     monkeypatch.setattr(_mod, 'DATA_DIR', tmp_path)
