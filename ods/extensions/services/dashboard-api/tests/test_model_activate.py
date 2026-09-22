@@ -3015,6 +3015,19 @@ class TestRestartWindowsLemonade:
         shell = shutil.which("pwsh") or shutil.which("powershell.exe")
         if not shell:
             pytest.skip("PowerShell is unavailable")
+        if sys.platform != "win32":
+            # WSL can expose powershell.exe on PATH even when Windows interop
+            # is disabled. Only run this cross-OS fixture when the shell can
+            # actually start; native Windows must still fail if it cannot.
+            try:
+                probe = _real_subprocess_run(
+                    [shell, "-NoProfile", "-NonInteractive", "-Command", "exit 0"],
+                    capture_output=True, text=True, timeout=5,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                pytest.skip("PowerShell is present but not runnable")
+            if probe.returncode != 0:
+                pytest.skip("PowerShell is present but not runnable")
 
         local_app_data = tmp_path / "AppData" / "Local"
         lemonade_exe = (
