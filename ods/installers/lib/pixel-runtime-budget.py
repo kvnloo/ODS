@@ -125,6 +125,17 @@ if existing_binds not in ([], [exec_control_bind]):
 # the host tree owner/mode, and exposes it read-only inside the sandbox.
 updated_sandbox_docker["binds"] = [exec_control_bind]
 updated_sandbox_docker["dangerouslyAllowExternalBindSources"] = True
+# RLIMIT_NPROC follows the real host UID across containers and host services.
+# The sandbox already has a per-container pidsLimit, so retaining the OpenClaw
+# default nproc=1024 can starve exec on large local-inference installations.
+updated_sandbox_docker["pidsLimit"] = 1024
+updated_sandbox_ulimits = updated_sandbox_docker.get("ulimits")
+if updated_sandbox_ulimits is not None:
+    if not isinstance(updated_sandbox_ulimits, dict):
+        raise SystemExit("OpenClaw sandbox ulimits are outside the ODS Pixel runtime contract")
+    updated_sandbox_ulimits.pop("nproc", None)
+    if not updated_sandbox_ulimits:
+        updated_sandbox_docker.pop("ulimits", None)
 # Model budgets must preserve native web-search provider choices.
 # OpenClaw validates the complete candidate below; search provisioning and
 # readiness belong to bootstrap, not this context/sandbox budget overlay.
@@ -168,7 +179,12 @@ parameter_markers = re.findall(
     r"(?<![a-z0-9.])(\d+(?:\.\d+)?)\s*b(?![a-z0-9])",
     model_label,
 )
-small_model = any(float(marker) <= 4 for marker in parameter_markers)
+small_model = (
+    any(float(marker) <= 4 for marker in parameter_markers)
+    or (not parameter_markers and re.search(
+        r"(?<![a-z0-9])(mini|micro|tiny)(?![a-z0-9])", model_label,
+    ) is not None)
+)
 lean_prompt = compact_context or small_model
 updated_pixel_config["modelContextWindow"] = context_window
 updated_pixel_config["leanPrompt"] = lean_prompt

@@ -13,6 +13,7 @@ def managed(tmp_path, monkeypatch):
     manager.touch()
     monkeypatch.setattr(host, 'INSTALL_DIR', tmp_path)
     monkeypatch.setattr(host.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(host, '_find_usable_bash', lambda: '/bin/bash')
     return tmp_path, manager
 
 
