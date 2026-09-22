@@ -519,3 +519,9 @@ Discovery alone does not complete that path. Other outstanding qualification: mo
 verification semantics, isolated dependency acquisition, persistent project-server
 lifecycle and Workspace stop/log controls, and native platform/GPU combinations.
 The overall harness goal remains incomplete and is not certified ready to merge.
+
+### Repository evidence preserves the owner's scope (2026-09-21)
+
+Removed a contradictory mandatory proposal instruction from the optional repository-evidence context. Previously the same context prohibited duplicate integrations while directing the agent to submit a recipe, even for research-only requests. Observed repository IDs and immutable revisions remain available; the context no longer selects a specific research tool or proposal sequence. Source documentation can inform implementation but cannot authorize operations. Request records and installation authority are unchanged.
+
+Validation: 26 request/API tests passed, including both empty and populated existing-integration discovery with a research-only request and no saved proposal or installation. This is context-policy coverage, not evidence that the 4B completed managed reuse. The existing-integration binding/advance path and local deployment remain outstanding.

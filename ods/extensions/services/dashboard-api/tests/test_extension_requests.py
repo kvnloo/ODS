@@ -32,21 +32,30 @@ def test_old_extension_command_does_not_create_current_context():
     assert pixel._edge_chat_body(body, history)['messages'] == history
 
 
-def test_request_evidence_resolves_commit_without_forwarding_unbounded_documents(monkeypatch, tmp_path):
+@pytest.mark.parametrize('existing', [[], ['registered-integration']])
+def test_request_evidence_resolves_commit_without_forwarding_unbounded_documents(monkeypatch, tmp_path, existing):
     from routers import extensions
     from unittest.mock import AsyncMock
     inspect = AsyncMock(return_value={'repository': 'https://github.com/owner/repo', 'commit': 'a' * 40,
-        'archived': False, 'existingExtensionIds': [], 'licenseIdentifier': 'MIT',
+        'archived': False, 'existingExtensionIds': existing, 'licenseIdentifier': 'MIT',
         'contentTrust': 'untrusted-upstream-evidence', 'evidenceScope': 'repository-documents-at-commit',
         'readme': 'UNTRUSTED_DOCUMENT' * 20000})
     monkeypatch.setattr('extension_github.inspect_repository', inspect)
     monkeypatch.setattr('extension_github.inspect_installation_layout', AsyncMock(return_value={'documents': []}))
     monkeypatch.setattr(extensions, '_extensions_lock_path', lambda: tmp_path / '.lock')
-    result = asyncio.run(extensions.chat_extension_request_context('owner', 'chat', 'turn', COMMAND,
+    command = COMMAND + ' research only; do not install'
+    result = asyncio.run(extensions.chat_extension_request_context('owner', 'chat', 'turn', command,
         include_evidence=True))
     assert 'a' * 40 in result['content']
     assert 'UNTRUSTED_DOCUMENT' not in result['content']
     assert 'pixel_ods_skill' in result['content']
+    assert json.dumps(existing) in result['content']
+    assert 'research-only scope' in result['content']
+    assert 'do not select an implementation or authorize installation' in result['content']
+    assert 'submit the researched recipe' not in result['content']
+    assert 'pixel_ods_web_extract' not in result['content']
+    saved = read_request(tmp_path / '.extension-requests', 'owner', 'chat', 'turn')
+    assert saved['installationStarted'] is False and 'proposal' not in saved
     inspect.assert_awaited_once()
     inspect.reset_mock()
     assert asyncio.run(extensions.chat_extension_request_context('owner', 'different', 'turn', 'hello',
