@@ -41,6 +41,7 @@ test('Python packaging installs the pinned checkout and retains the explicit app
   const service = recipe.compose.services['example-project'];
   assert.equal(service.build.context, source.repository + '.git#' + source.commit);
   assert.match(service.build.dockerfile_inline, /^FROM python:3\.12-slim\n/);
+  assert.match(service.build.dockerfile_inline, /apt-get install -y --no-install-recommends git/);
   assert.match(service.build.dockerfile_inline, /COPY \. \.\nRUN python -m pip install --no-cache-dir \. && python -m pip check/);
   assert.deepEqual(service.command, command);
   assert.equal(service.healthcheck, undefined);

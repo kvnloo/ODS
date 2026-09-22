@@ -112,7 +112,7 @@ def test_install_prepares_only_dependency_images_and_surfaces_build_failure(monk
         assert '[REDACTED] build output' in error
     base = ['docker', 'compose', '-p', 'ods']
     assert calls == [base + ['config', '--format', 'json'], base + ['pull', 'demo-db'],
-                     base + ['build', 'demo', 'demo-worker']]
+                     base + ['build', '--build-arg', 'BUILDKIT_CONTEXT_KEEP_GIT_DIR=1', 'demo', 'demo-worker']]
     assert progress[-1][2] == 'Building images from source...'
 
 
@@ -123,11 +123,11 @@ def test_build_diagnostic_preserves_actual_pip_failure_and_redacts_before_tail(t
     services = {'demo': {'environment': {'PASSWORD': 'compose-value'},
                          'build': {'args': {'ACCESS_TOKEN': 'build-value'}}}}
     failure = "ERROR: Directory '.' is not installable. Neither 'setup.py' nor 'pyproject.toml' found."
-    output = ('x' * 4000 + '\nprocess-value persisted-value compose-value build-value\n'
+    output = ('x' * 16000 + '\nprocess-value persisted-value compose-value build-value\n'
               'https://user:pass@example.org/repo?token=query-value\nBearer bearer-value\n' + failure)
     actual = _mod._install_build_diagnostic(types.SimpleNamespace(stderr=output), services)
     assert actual.endswith(failure)
-    assert len(actual) <= 1500
+    assert len(actual) <= 7600
     for secret in ['process-value', 'persisted-value', 'compose-value', 'build-value',
                    'user:pass', 'query-value', 'bearer-value']:
         assert secret not in actual
@@ -155,7 +155,7 @@ def test_windows_remote_build_uses_compose_plan_without_url_file_entitlement(mon
     result = _mod._build_install_sources(['docker', 'compose', '-f', 'overlay.yaml'],
         ['demo'], {'demo': {'build': {'context': 'https://github.com/example/demo.git'}}})
     assert result.returncode == build_exit
-    assert calls[0][0] == ['docker', 'compose', '-f', 'overlay.yaml', 'build', '--print', 'demo']
+    assert calls[0][0] == ['docker', 'compose', '-f', 'overlay.yaml', 'build', '--build-arg', 'BUILDKIT_CONTEXT_KEEP_GIT_DIR=1', '--print', 'demo']
     assert calls[1][0] == ['docker', 'buildx', 'bake', '--file', '-', '--load', '--progress', 'plain', 'demo']
     assert calls[1][1]['input'] == plan
     assert len(calls) == 2  # Never replay a failed Dockerfile build.

@@ -50,7 +50,7 @@ export function createExtensionRequestStatusTool(context, {submit = submitExtens
         const extra = ['existingExtensionIds','integrationBound','runtimeError'].filter(key => Object.hasOwn(value ?? {}, key));
         if (extra.includes('runtimeError') && (value.runtimeStatus!=='error'
             || typeof value.runtimeError!=='string' || !value.runtimeError.trim()
-            || [...value.runtimeError].length>2000)) return unavailable;
+            || [...value.runtimeError].length>8192)) return unavailable;
         if (extra.includes('existingExtensionIds') && (!Array.isArray(matches) || matches.length > 64
             || matches.some(x => typeof x !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(x))
             || new Set(matches).size !== matches.length)) return unavailable;

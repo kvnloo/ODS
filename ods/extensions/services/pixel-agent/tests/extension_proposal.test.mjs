@@ -80,7 +80,9 @@ test('request status is owner-bound, read-only and never promotes missing eviden
   assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).details.runtimeStatus,'enabled');
   value.runtimeStatus='error'; value.runtimeError='Build failed: missing pyproject.toml';
   assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).details.runtimeError,value.runtimeError);
-  for (const error of ['', null, 42, 'x'.repeat(2001)]) {
+  value.runtimeError='Build output: '+ 'x'.repeat(7000);
+  assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).details.runtimeError,value.runtimeError);
+  for (const error of ['', null, 42, 'x'.repeat(8193)]) {
     value.runtimeError=error;
     assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).isError,true);
   }

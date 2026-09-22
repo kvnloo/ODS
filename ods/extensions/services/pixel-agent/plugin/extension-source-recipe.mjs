@@ -94,6 +94,7 @@ export function compileSourceRecipe(source) {
   // Dependency/build/import failures remain real installer failures.
   const inline = hasPython ? [
     `FROM python:${source.pythonVersion}-slim`,
+    'RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*',
     'WORKDIR /opt/ods/source',
     'COPY . .',
     'RUN python -m pip install --no-cache-dir . && python -m pip check',

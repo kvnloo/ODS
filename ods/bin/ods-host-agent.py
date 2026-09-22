@@ -7285,9 +7285,12 @@ def _build_install_sources(base, builds, services):
     )
     options = dict(cwd=str(INSTALL_DIR), capture_output=True, text=True,
                    timeout=SUBPROCESS_TIMEOUT_START)
+    # Preserve commit metadata used by SCM-based package builders. BuildKit
+    # otherwise silently strips .git from remote Git contexts.
+    source_args = ['--build-arg', 'BUILDKIT_CONTEXT_KEEP_GIT_DIR=1'] if remote else []
     if platform.system() != 'Windows' or not remote:
-        return subprocess.run(base + ['build', *sorted(builds)], **options)
-    compiled = subprocess.run(base + ['build', '--print', *sorted(builds)], **options)
+        return subprocess.run(base + ['build', *source_args, *sorted(builds)], **options)
+    compiled = subprocess.run(base + ['build', *source_args, '--print', *sorted(builds)], **options)
     if compiled.returncode:
         return compiled
     try:
@@ -7309,9 +7312,8 @@ def _install_build_diagnostic(result, services: dict) -> str:
     Redact before truncating so a tail cannot expose part of a credential.
     Never include the resolved Compose configuration or build plan.
     """
-    output = str(getattr(result, 'stderr', '') or '')
-    if not output.strip():
-        output = str(getattr(result, 'stdout', '') or '')
+    output = '\n'.join(str(getattr(result, stream, '') or '')
+                       for stream in ('stdout', 'stderr'))
     secrets = set()
     sensitive = re.compile(r'(?i)(secret|token|password|passwd|credential|api.?key|private.?key|authorization)')
     def collect(values):
@@ -7341,7 +7343,7 @@ def _install_build_diagnostic(result, services: dict) -> str:
     output = re.sub(r'(?im)((?:[\w-]*(?:token|password|passwd|secret|api[_-]?key|credential)[\w-]*)[\x22\x27]?\s*[:=]\s*)(?:\x22[^\x22]*\x22|\x27[^\x27]*\x27|[^\s,;]+)',
                     r'\1[REDACTED]', output)
     output = ''.join(c for c in output if c in '\n\t' or ord(c) >= 32).strip()
-    return output[-1500:] or 'No build diagnostic output was returned.'
+    return output[-7600:] or 'No build diagnostic output was returned.'
 
 
 def _prepare_install_images(flags: list[str], service_id: str) -> tuple[bool, str]:

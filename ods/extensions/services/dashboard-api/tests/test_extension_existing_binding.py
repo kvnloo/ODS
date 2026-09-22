@@ -166,8 +166,8 @@ def test_status_preserves_bounded_failure_evidence_only_for_failed_runtime(exist
     observed = asyncio.run(extensions._observe_extension_request(identity, 'owner'))
     assert observed['runtimeError'] == 'missing pyproject.toml'
     assert observed['runtimeStatus'] == 'error'
-    detail.return_value = {'status': 'error', 'error_message': 'x' * 3000}
-    assert len(asyncio.run(extensions._observe_extension_request(identity, 'owner'))['runtimeError']) == 2000
+    detail.return_value = {'status': 'error', 'error_message': 'x' * 9000}
+    assert len(asyncio.run(extensions._observe_extension_request(identity, 'owner'))['runtimeError']) == 8192
     for status, error in [('enabled', 'old failure'), ('error', None), ('error', 42), ('error', ' ')]:
         detail.return_value = {'status': status, 'error_message': error}
         assert 'runtimeError' not in asyncio.run(extensions._observe_extension_request(identity, 'owner'))
