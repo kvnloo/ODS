@@ -1691,6 +1691,11 @@ async def _observe_extension_request(payload, api_key):
             if status in {'enabled', 'cli_installed', 'disabled', 'stopped', 'not_installed',
                           'installing', 'setting_up', 'unhealthy', 'error', 'unavailable'}:
                 result['runtimeStatus'] = status
+                error = detail.get('error_message')
+                if status == 'error' and isinstance(error, str) and error.strip():
+                    # Preserve observed failure evidence, not a new action or
+                    # inferred diagnosis. Same owner/extension as this read.
+                    result['runtimeError'] = error[:2000]
         except (HTTPException, OSError, ValueError, asyncio.TimeoutError):
             pass  # Missing observation is never failure or success evidence.
     return result

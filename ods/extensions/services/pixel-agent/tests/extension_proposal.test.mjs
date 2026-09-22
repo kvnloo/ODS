@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';
-import {createExtensionProposalTool, createPythonLibraryProposalTool, createExtensionRequestStatusTool, createExtensionRequestPrepareTool, createExtensionRequestAdvanceTool, submitExtensionProposal} from '../plugin/extension-proposal.mjs';
+import {createSourceProposalTool, createExtensionProposalTool, createPythonLibraryProposalTool, createExtensionRequestStatusTool, createExtensionRequestPrepareTool, createExtensionRequestAdvanceTool, submitExtensionProposal} from '../plugin/extension-proposal.mjs';
 
 const context = {agentId: 'pixel', sessionKey: 'agent:pixel:openai-user:ods-' + createHash('sha256').update('chat').digest('hex')};
 const args = {chatId: 'chat', requestId: 'turn', candidate: {repository: 'https://github.com/o/r',
@@ -78,6 +78,15 @@ test('request status is owner-bound, read-only and never promotes missing eviden
   assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).isError,true);
   value.prepared=true;
   assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).details.runtimeStatus,'enabled');
+  value.runtimeStatus='error'; value.runtimeError='Build failed: missing pyproject.toml';
+  assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).details.runtimeError,value.runtimeError);
+  for (const error of ['', null, 42, 'x'.repeat(2001)]) {
+    value.runtimeError=error;
+    assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).isError,true);
+  }
+  value.runtimeError='Build failed'; value.runtimeStatus='enabled';
+  assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).isError,true);
+  delete value.runtimeError;
   value.requestId='other';
   assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).isError,true);
 });
@@ -366,4 +375,61 @@ test('preparation rejections preserve scope and distinguish missing proposal fro
     assert.equal(result.details,undefined);
     assert.match(result.content[0].text,/not confirmed/);
   }
+});
+
+test('incomplete CLI source reports missing verification before submitting any proposal', async () => {
+  const calls=[];
+  const tool=createExtensionProposalTool(context,{submit:async payload=>{
+    calls.push(payload);
+    return {schemaVersion:1,kind:'ods-extension-request-scope',
+      sessionHash:context.sessionKey.split('ods-')[1],request:{chatId:'chat',requestId:'turn'}};
+  }});
+  const result=await tool.execute('proposal',{source:{repository:'https://github.com/o/r',
+    commit:'a'.repeat(40),serviceId:'example',name:'Example',port:0,cliOnly:true}});
+  assert.equal(result.isError,true);
+  assert.match(result.content[0].text,/requires source.command/);
+  assert.deepEqual(calls.map(x=>x.action),['github-request-resolve']);
+  assert.equal(tool.parameters.properties.source.allOf,undefined);
+});
+
+test('flat source capability preserves the same compiled request and validation as advanced proposal', async () => {
+  const source={repository:'https://github.com/o/r',commit:'a'.repeat(40),serviceId:'example',
+    name:'Example',port:0,cliOnly:true,dockerfile:'Dockerfile',command:['example','self-test']};
+  const calls=[];
+  const dependencies={submit:async payload=>{
+    calls.push(payload);
+    return payload.action==='github-request-resolve'
+      ? {schemaVersion:1,kind:'ods-extension-request-scope',sessionHash:context.sessionKey.split('ods-')[1],request:{chatId:'chat',requestId:'turn'}}
+      : receipt;
+  }};
+  const flat=createSourceProposalTool(context,dependencies);
+  assert.equal(createSourceProposalTool({agentId:'other'},dependencies),null);
+  const {cliOnly,dockerfile,command,...identity}=source;
+  const input={...identity,runtime:'cli',buildKind:'dockerfile',buildDefinition:dockerfile,verificationCommand:command};
+  const first=await flat.execute('flat',input);
+  const submitted=calls[1]; calls.length=0;
+  const second=await createExtensionProposalTool(context,dependencies).execute('advanced',{source});
+  assert.deepEqual(first,second);
+  assert.deepEqual(calls[1],submitted);
+  assert.equal(flat.parameters.properties.candidate,undefined);
+  assert.equal(flat.parameters.properties.chatId,undefined);
+  calls.length=0;
+  assert.equal((await flat.execute('invalid',{...input,verificationCommand:undefined})).isError,true);
+  assert.deepEqual(calls,[]);
+  for (const change of [{buildKind:'shell'}, {buildDefinition:''}, {runtime:'daemon'},
+    {verificationCommand:['CMD','test']}, {applicationCommand:['server']},
+    {port:8080}, {healthPath:'/health'}, {runtime:'http',port:0},
+    {runtime:'http',port:8080}, {runtime:'http',port:65536,healthPath:'/health'}]) {
+    assert.equal((await flat.execute('invalid',{...input,...change})).isError,true);
+    assert.deepEqual(calls,[]);
+  }
+  const mismatch=await flat.execute('runtime-mismatch',{...input,runtime:'http'});
+  assert.match(mismatch.content[0].text,/runtime=http requires port/);
+  assert.match(mismatch.content[0].text,/runtime=cli/);
+  assert.equal(mismatch.details.proposalSubmitted,false);
+  assert.deepEqual(calls,[]);
+  const web={...input,runtime:'http',port:8080,healthPath:'/health',verificationCommand:['curl','-f','http://localhost:8080/health']};
+  await flat.execute('web',web);
+  assert.deepEqual(calls[1].candidate.compose.services.example.healthcheck.test,['CMD',...web.verificationCommand]);
+  assert.equal(calls[1].candidate.compose.services.example.command,undefined);
 });

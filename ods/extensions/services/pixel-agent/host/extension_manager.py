@@ -1113,10 +1113,14 @@ def _read_request_status(env_path, port, payload):
     status, value = _request_json(port=port, credential=credential, method='POST',
         path='/api/extensions/github/requests/status', timeout=25,
         body={key: envelope[key] for key in ('chatId', 'requestId')})
-    extra = {key for key in ('existingExtensionIds', 'integrationBound') if isinstance(value, dict) and key in value}
+    extra = {key for key in ('existingExtensionIds', 'integrationBound', 'runtimeError') if isinstance(value, dict) and key in value}
     value = _exact_object(value, {'schemaVersion', 'kind', 'chatId', 'requestId', 'requestState',
                                   'proposalAccepted', 'prepared', 'extensionId', 'runtimeStatus'} | extra)
     matches = value.get('existingExtensionIds', [])
+    if 'runtimeError' in value and (value['runtimeStatus'] != 'error'
+            or not isinstance(value['runtimeError'], str) or not value['runtimeError'].strip()
+            or len(value['runtimeError']) > 2000):
+        raise ManagerError('invalid scoped runtime diagnostic')
     if (not isinstance(matches, list) or len(matches) > 64
             or any(not isinstance(item, str) or not SERVICE_ID.fullmatch(item) for item in matches)
             or len(set(matches)) != len(matches)):

@@ -12,6 +12,7 @@
       "pixel_ods_activity",
       "pixel_ods_history",
       "pixel_ods_extension_proposal",
+      "pixel_ods_source_proposal",
       "pixel_ods_python_library_proposal",
       "pixel_ods_extension_request_status",
       "pixel_ods_extension_request_prepare",

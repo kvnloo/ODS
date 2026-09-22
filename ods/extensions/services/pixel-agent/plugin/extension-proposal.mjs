@@ -47,7 +47,10 @@ export function createExtensionRequestStatusTool(context, {submit = submitExtens
         if (!args) return noActiveRequest();
         const value=await submit({schemaVersion:1,action:'github-request-status',...args});
         const matches = value?.existingExtensionIds;
-        const extra = ['existingExtensionIds','integrationBound'].filter(key => Object.hasOwn(value ?? {}, key));
+        const extra = ['existingExtensionIds','integrationBound','runtimeError'].filter(key => Object.hasOwn(value ?? {}, key));
+        if (extra.includes('runtimeError') && (value.runtimeStatus!=='error'
+            || typeof value.runtimeError!=='string' || !value.runtimeError.trim()
+            || [...value.runtimeError].length>2000)) return unavailable;
         if (extra.includes('existingExtensionIds') && (!Array.isArray(matches) || matches.length > 64
             || matches.some(x => typeof x !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(x))
             || new Set(matches).size !== matches.length)) return unavailable;
@@ -71,6 +74,43 @@ export function createExtensionRequestStatusTool(context, {submit = submitExtens
 
 // A library has neither a server port nor a CLI entrypoint by default. Give
 // small models one flat contract using the existing source compiler.
+export function createSourceProposalTool(context, dependencies = {}) {
+  const proposal = createExtensionProposalTool(context, dependencies);
+  if (!proposal) return null;
+  return {
+    name:'pixel_ods_source_proposal', label:'Propose source application',
+    description:'Save a researched GitHub application recipe for this conversation. Supply the build method and real verification command; never invent them. CLI projects have runtime=cli and port=0. HTTP services have runtime=http, their actual port, and healthPath. This saves a proposal, never installs. Advanced multi-service recipes remain available through pixel_ods_extension_proposal.',
+    parameters:{type:'object',additionalProperties:false,
+      required:['repository','commit','serviceId','name','buildKind','buildDefinition','runtime','port','verificationCommand'],
+      properties:{
+        ...Object.fromEntries(['repository','commit','serviceId','name','description','port','healthPath'].map(key=>[key,sourceRecipeSchema.properties[key]])),
+        buildKind:{type:'string',enum:['dockerfile','dockerfileInline','pythonVersion']},
+        buildDefinition:{type:'string',minLength:1,description:'For dockerfile: inspected upstream path. For dockerfileInline: complete researched Dockerfile copying and installing the pinned source. For pythonVersion: supported version such as 3.12, ONLY if upstream has pyproject.toml or setup.py.'},
+        runtime:{type:'string',enum:['cli','http']},
+        verificationCommand:{type:'array',minItems:1,items:{type:'string',minLength:1},description:'Actual verification executable and arguments. For cli it must test the application and exit successfully; for http it probes the running service. Do not include Docker CMD or CMD-SHELL markers. Inspect upstream usage/tests; never invent --version support.'},
+        applicationCommand:sourceRecipeSchema.properties.command,
+      }},
+    execute(id, input) {
+      const {buildKind,buildDefinition,runtime,verificationCommand,applicationCommand,...source}=input ?? {};
+      const invalid=text=>({isError:true,content:[{type:'text',text}],details:{proposalSubmitted:false}});
+      if (!['dockerfile','dockerfileInline','pythonVersion'].includes(buildKind)
+          || typeof buildDefinition!=='string' || !buildDefinition.trim()) return invalid('Supply buildKind and the inspected buildDefinition. No proposal was submitted.');
+      if (!['cli','http'].includes(runtime) || !Array.isArray(verificationCommand) || !verificationCommand.length
+          || verificationCommand.some(x=>typeof x!=='string' || !x.length)
+          || ['CMD','CMD-SHELL'].includes(verificationCommand[0])) return invalid('Supply runtime and the actual verification executable/arguments. No proposal was submitted.');
+      if (runtime==='cli' && applicationCommand!==undefined) return invalid('For CLI use verificationCommand only; applicationCommand is for HTTP server startup. No proposal was submitted.');
+      if (runtime==='cli' && (source.port!==0 || (source.healthPath!==undefined && source.healthPath!==''))) return invalid('runtime=cli requires port=0 and no healthPath. Correct these fields using the inspected application requirements. No proposal was submitted.');
+      if (runtime==='http' && (!Number.isInteger(source.port) || source.port<1 || source.port>65535
+          || typeof source.healthPath!=='string' || !source.healthPath.startsWith('/'))) return invalid('runtime=http requires port between 1 and 65535 and healthPath starting with /. If the inspected application is a CLI, choose runtime=cli, port=0, omit healthPath and applicationCommand, and supply its real verificationCommand. Do not invent a web server. No proposal was submitted.');
+      return proposal.execute(id,{source:{...source,[buildKind]:buildDefinition,
+        cliOnly:runtime==='cli',
+        ...(runtime==='cli' ? {command:verificationCommand}
+          : {healthcheck:['CMD',...verificationCommand],...(applicationCommand!==undefined ? {command:applicationCommand} : {})}),
+      }});
+    },
+  };
+}
+
 export function createPythonLibraryProposalTool(context, dependencies = {}) {
   const proposal = createExtensionProposalTool(context, dependencies);
   if (!proposal) return null;

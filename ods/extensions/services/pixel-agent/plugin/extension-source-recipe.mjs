@@ -4,12 +4,9 @@
 export const sourceRecipeSchema = {
   type: 'object', additionalProperties: false,
   required: ['repository', 'commit', 'serviceId', 'name', 'port'],
-  allOf: [
-    {if: {required: ['cliOnly'], properties: {cliOnly: {const: true}}},
-      then: {anyOf: [{required: ['command']}, {required: ['pythonVersion', 'pythonImports']}]},
-      else: {required: ['healthPath', 'healthcheck']}},
-    {if: {required: ['pythonVersion']}, then: {anyOf: [{required: ['command']}, {required: ['pythonImports']}] }},
-  ],
+  // Cross-field validation lives in compileSourceRecipe, which returns the
+  // specific missing requirement. Native if/then validation otherwise stops
+  // before that diagnostic and reports only "must match then schema".
   properties: {
     repository: {type: 'string'}, commit: {type: 'string', pattern: '^[a-f0-9]{40}$'},
     serviceId: {type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,63}$'},
@@ -52,7 +49,7 @@ export function compileSourceRecipe(source) {
   if (typeof commit !== 'string' || !/^[a-f0-9]{40}$/.test(commit))
     issues.push('commit: expected a verified full 40-character lowercase commit SHA');
   if (typeof serviceId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(serviceId))
-    issues.push('serviceId: expected a project identifier of 1–64 lowercase letters, digits or hyphens, starting with a letter or digit; not a tool name');
+    issues.push('serviceId: expected a project identifier of 1-64 lowercase letters, digits or hyphens, starting with a letter or digit; not a tool name');
   if (typeof name !== 'string' || !name.trim() || name.length > 160)
     issues.push('name: expected a nonempty display name up to 160 characters');
   if (!Number.isInteger(port) || port < 0 || port > 65535)

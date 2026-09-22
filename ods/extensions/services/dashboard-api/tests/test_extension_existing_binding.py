@@ -155,3 +155,20 @@ def test_missing_proposal_is_a_scoped_rejection_without_state_mutation(existing)
     assert error.value.detail == {'schemaVersion':1, 'kind':'ods-extension-request-preparation-rejected',
                                  **identity, 'reason':'proposal_required', 'installationStarted':False}
     assert read_request(directory, 'owner', 'chat', 'original') == before
+
+
+def test_status_preserves_bounded_failure_evidence_only_for_failed_runtime(existing, monkeypatch):
+    roots, package, directory, identity = existing
+    asyncio.run(extensions.extension_github_prepare_request(request(identity), api_key='owner'))
+    before = read_request(directory, 'owner', 'chat', 'original')
+    detail = AsyncMock(return_value={'status': 'error', 'error_message': 'missing pyproject.toml'})
+    monkeypatch.setattr(extensions, 'extension_detail', detail)
+    observed = asyncio.run(extensions._observe_extension_request(identity, 'owner'))
+    assert observed['runtimeError'] == 'missing pyproject.toml'
+    assert observed['runtimeStatus'] == 'error'
+    detail.return_value = {'status': 'error', 'error_message': 'x' * 3000}
+    assert len(asyncio.run(extensions._observe_extension_request(identity, 'owner'))['runtimeError']) == 2000
+    for status, error in [('enabled', 'old failure'), ('error', None), ('error', 42), ('error', ' ')]:
+        detail.return_value = {'status': status, 'error_message': error}
+        assert 'runtimeError' not in asyncio.run(extensions._observe_extension_request(identity, 'owner'))
+    assert read_request(directory, 'owner', 'chat', 'original') == before

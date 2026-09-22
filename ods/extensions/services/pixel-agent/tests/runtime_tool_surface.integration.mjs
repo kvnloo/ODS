@@ -23,12 +23,13 @@ test('working tools are direct while specialist tools remain in the real catalog
   const read = tool('read'), status = tool('pixel_ods_extension_request_status');
   const advance = tool('pixel_ods_extension_request_advance');
   const prepare = tool('pixel_ods_extension_request_prepare');
-  const proposal = tool('pixel_ods_extension_proposal');
+  const proposal = tool('pixel_ods_source_proposal');
+  const advanced = tool('pixel_ods_extension_proposal');
   const library = tool('pixel_ods_python_library_proposal');
   const specialist = tool('pixel_ods_workspace_preview');
-  const result = run([read, status, prepare, advance, proposal, library, specialist]);
+  const result = run([read, status, prepare, advance, proposal, library, specialist, advanced]);
   assert.deepEqual(result.tools, [...controls, read, status, prepare, advance, proposal, library]);
-  assert.equal(result.catalogToolCount, 7);
+  assert.equal(result.catalogToolCount, 8);
   assert.equal(result.catalogRegistered, true);
   assert.ok(result.catalogRef.current);
 });
@@ -55,7 +56,7 @@ test('disabled search preserves the input tools', () => {
 
 test('tool visibility is independent of owner language and request content', () => {
   const tools = [tool('read'), tool('pixel_ods_skill'), tool('specialist')];
-  for (const prompt of ['instale a extensão', 'do not install; research only', 'sim', '音楽']) {
+  for (const prompt of ['instale a extensÃ£o', 'do not install; research only', 'sim', 'éŸ³æ¥½']) {
     assert.deepEqual(run(tools, { prompt }).tools, [...controls, ...tools.slice(0, 2)]);
   }
 });

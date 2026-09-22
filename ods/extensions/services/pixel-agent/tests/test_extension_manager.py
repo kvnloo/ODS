@@ -1123,6 +1123,14 @@ class RecipeValidationTests(unittest.TestCase):
             self.assertEqual(manager._read_request_status(pathlib.Path('/unused'), 3002, json.dumps(envelope).encode()), receipt)
             self.assertEqual(request.call_args.kwargs['path'], '/api/extensions/github/requests/status')
             self.assertEqual(request.call_args.kwargs['body'], {'chatId': 'chat', 'requestId': 'turn'})
+            failed = {**receipt, 'prepared': True, 'runtimeStatus': 'error', 'runtimeError': 'missing pyproject.toml'}
+            request.return_value = (200, failed)
+            self.assertEqual(manager._read_request_status(pathlib.Path('/unused'), 3002, json.dumps(envelope).encode()), failed)
+            for change in [{'runtimeError': ''}, {'runtimeError': None}, {'runtimeError': 42},
+                           {'runtimeError': 'x' * 2001}, {'runtimeStatus': 'enabled'}, {'requestId': 'other'}]:
+                request.return_value = (200, {**failed, **change})
+                with self.assertRaises(manager.ManagerError):
+                    manager._read_request_status(pathlib.Path('/unused'), 3002, json.dumps(envelope).encode())
             for matches in [[], ['existing-a']]:
                 request.return_value = (200, {**receipt, 'existingExtensionIds': matches})
                 self.assertEqual(manager._read_request_status(pathlib.Path('/unused'), 3002, json.dumps(envelope).encode())['existingExtensionIds'], matches)
