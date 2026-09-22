@@ -38,7 +38,7 @@ export function createExtensionRequestStatusTool(context, {submit = submitExtens
       || !/^agent:pixel:openai-user:ods-[a-f0-9]{64}$/.test(context.sessionKey)) return null;
   return {
     name:'pixel_ods_extension_request_status', label:'Check extension request',
-    description:'Read the saved GitHub extension request and its observed managed runtime state. The adapter resolves the active request from this conversation; call with no arguments. Does not prepare, install, restart or change anything. existingExtensionIds identifies registered repository matches to inspect and reuse; it does not bind this request or authorize installation. Proposal acceptance and preparation do not establish installation success; not_observed means unknown. cli_installed establishes the configured CLI verification, not every possible application behavior.',
+    description:'Read the saved GitHub extension request and its observed managed runtime state. The adapter resolves the active request from this conversation; call with no arguments. Does not prepare, install, restart or change anything. existingExtensionIds identifies registered repository matches to inspect and reuse; it does not bind this request or authorize installation. integrationBound identifies an existing definition selected for reuse, not a new proposal. Proposal acceptance and preparation do not establish installation success; not_observed means unknown. requestState=pending means the request is active, not that user permission is missing. cli_installed establishes the configured CLI verification, not every possible application behavior.',
     parameters:{type:'object',additionalProperties:false,properties:{}},
     async execute(_id,args) {
       const unavailable={isError:true,content:[{type:'text',text:'The saved extension request could not be observed. No installation was started; its outcome remains unknown.'}]};
@@ -47,8 +47,8 @@ export function createExtensionRequestStatusTool(context, {submit = submitExtens
         if (!args) return noActiveRequest();
         const value=await submit({schemaVersion:1,action:'github-request-status',...args});
         const matches = value?.existingExtensionIds;
-        const extra = Object.hasOwn(value ?? {}, 'existingExtensionIds') ? ['existingExtensionIds'] : [];
-        if (extra.length && (!Array.isArray(matches) || matches.length > 64
+        const extra = ['existingExtensionIds','integrationBound'].filter(key => Object.hasOwn(value ?? {}, key));
+        if (extra.includes('existingExtensionIds') && (!Array.isArray(matches) || matches.length > 64
             || matches.some(x => typeof x !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(x))
             || new Set(matches).size !== matches.length)) return unavailable;
         if (!exact(value,['schemaVersion','kind','chatId','requestId','requestState','proposalAccepted','prepared','extensionId','runtimeStatus',...extra])
@@ -56,9 +56,12 @@ export function createExtensionRequestStatusTool(context, {submit = submitExtens
             || value.chatId!==args.chatId || value.requestId!==args.requestId
             || !['pending','cancelled','expired'].includes(value.requestState)
             || typeof value.proposalAccepted!=='boolean' || typeof value.prepared!=='boolean'
+            || typeof (value.integrationBound ?? false)!=='boolean'
+            || (extra.includes('integrationBound') && value.integrationBound === null)
+            || (value.integrationBound && value.proposalAccepted)
             || (value.extensionId!==null && (typeof value.extensionId!=='string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(value.extensionId)))
             || !['not_observed','enabled','cli_installed','disabled','stopped','not_installed','installing','setting_up','unhealthy','error','unavailable'].includes(value.runtimeStatus)
-            || (value.prepared && (!value.proposalAccepted || !value.extensionId))
+            || (value.prepared && (!(value.proposalAccepted || value.integrationBound) || !value.extensionId))
             || (value.runtimeStatus!=='not_observed' && !value.prepared)) return unavailable;
         return {content:[{type:'text',text:JSON.stringify(value)}],details:value};
       } catch {return unavailable;}
@@ -99,7 +102,7 @@ export function createExtensionRequestAdvanceTool(context, {submit = submitExten
   if (!createExtensionRequestStatusTool(context)) return null;
   return {
     name:'pixel_ods_extension_request_advance', label:'Install prepared ODS extension',
-    description:'Advance installation of this conversation’s accepted, prepared GitHub recipe when the owner has requested installation. Call with no arguments; ODS resolves the active request from this conversation, including follow-ups. ODS resolves the extension and dependencies from saved state and records the host attempt before dispatch. Repeating this call observes an unresolved attempt instead of duplicating it. pending means still running; succeeded requires host completion and runtime observation. Stop advancing on failed, blocked, configuration_required or reconciliation_required and inspect the reported state. This does not run arbitrary host commands or verify application behavior beyond the recipe checks.',
+    description:'Advance this conversation’s prepared GitHub recipe or bound existing integration when the owner has requested installation. Call with no arguments; ODS resolves the active request from this conversation, including follow-ups. ODS resolves the extension and dependencies from saved state and records the host attempt before dispatch. Repeating this call observes an unresolved attempt instead of duplicating it. pending means still running; succeeded means managed readiness was observed. dispatched=false with operationId=null means this call started no installation, including when the target was already installed. Stop advancing on failed, blocked, configuration_required or reconciliation_required and inspect the reported state. This does not run arbitrary host commands or verify application behavior beyond the recipe checks.',
     parameters:{type:'object',additionalProperties:false,properties:{}},
     async execute(_id,args) {
       const unknown={isError:true,content:[{type:'text',text:'Installation outcome is unconfirmed. Inspect this saved request before further action; a host operation may already exist.'}]};
@@ -126,14 +129,27 @@ export function createExtensionRequestPrepareTool(context, {submit = submitExten
   if (!createExtensionRequestStatusTool(context)) return null;
   return {
     name:'pixel_ods_extension_request_prepare', label:'Prepare managed extension recipe',
-    description:'Prepare the accepted GitHub proposal for this conversation in the ODS extension library. The adapter resolves the active request from this conversation; call with no arguments. Revalidates its exact saved recipe and source revision; repeating preparation recovers the identical package. Does not install dependencies, start containers or prove runtime readiness. Use when the owner requests preparing or installing this integration; research alone does not request preparation.',
-    parameters:{type:'object',additionalProperties:false,properties:{}},
+    description:'Prepare this conversation’s accepted GitHub proposal or reuse its sole existing repository integration with no arguments. If several integrations match, supply extensionId from observed existingExtensionIds. An existing binding is recovered unchanged. Binding preserves its exact definition and does not submit another recipe. The adapter resolves the active request from this conversation. Does not install dependencies, start containers or prove runtime readiness. Use when the owner requests preparing or installing this integration; research alone does not request preparation. A bound existing integration can subsequently be advanced through pixel_ods_extension_request_advance.',
+    parameters:{type:'object',additionalProperties:false,properties:{extensionId:{type:'string',pattern:'^[a-z0-9][a-z0-9_-]{0,63}$',description:'Optional observed existing integration to reuse for the requested repository.'}}},
     async execute(_id,args) {
       const unavailable={isError:true,content:[{type:'text',text:'Preparation was not confirmed. Inspect this request with pixel_ods_extension_request_status before continuing; no runtime success is established.'}]};
       try {
+        const existing = exact(args, ['extensionId']) ? args.extensionId : undefined;
+        if (existing !== undefined && (typeof existing !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(existing))) return unavailable;
+        if (existing !== undefined) args = {};
         args = await resolveRequestIdentity(context, args, submit);
         if (!args) return noActiveRequest();
-        const value=await submit({schemaVersion:1,action:'github-request-prepare',...args});
+        const value=await submit({schemaVersion:1,action:'github-request-prepare',...args,...(existing !== undefined ? {extensionId:existing} : {})});
+        if (existing !== undefined || value?.kind === 'ods-extension-request-binding') {
+          if (!exact(value,['schemaVersion','kind','chatId','requestId','extensionId','definitionDigest','state','installationStarted','runtimeVerified'])
+              || value.schemaVersion!==1 || value.kind!=='ods-extension-request-binding'
+              || value.chatId!==args.chatId || value.requestId!==args.requestId
+              || typeof value.extensionId!=='string' || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(value.extensionId)
+              || (existing !== undefined && value.extensionId!==existing)
+              || typeof value.definitionDigest!=='string' || !/^[a-f0-9]{64}$/.test(value.definitionDigest)
+              || value.state!=='bound' || value.installationStarted!==false || value.runtimeVerified!==false) return unavailable;
+          return {content:[{type:'text',text:JSON.stringify(value)}],details:value};
+        }
         if (!exact(value,['schemaVersion','kind','chatId','requestId','draftId','extensionId','recipeDigest','state','installationStarted','registered','runtimeVerified'])
             || value.schemaVersion!==1 || value.kind!=='ods-extension-request-preparation'
             || value.chatId!==args.chatId || value.requestId!==args.requestId || value.state!=='available'

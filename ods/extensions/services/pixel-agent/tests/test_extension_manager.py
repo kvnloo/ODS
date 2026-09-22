@@ -1280,6 +1280,21 @@ class RecipeValidationTests(unittest.TestCase):
             self.assertEqual(result, receipt)
             self.assertEqual(observed[-1], ('/api/extensions/github/requests/prepare',
                                            {'chatId': 'chat', 'requestId': 'turn'}))
+            receipt = {'schemaVersion': 1, 'kind': 'ods-extension-request-binding',
+                       'chatId': 'chat', 'requestId': 'turn', 'extensionId': 'example',
+                       'definitionDigest': 'd' * 64, 'state': 'bound',
+                       'installationStarted': False, 'runtimeVerified': False}
+            with tempfile.TemporaryDirectory() as directory:
+                env = pathlib.Path(directory) / '.env'
+                env.write_text('DASHBOARD_API_KEY=' + 'a' * 64 + '\n');env.chmod(0o600)
+                binding_envelope = {**prepare_envelope, 'extensionId': 'example'}
+                result = manager._prepare_request(env, server.server_port, json.dumps(binding_envelope).encode())
+                self.assertEqual(result, receipt)
+                self.assertEqual(observed[-1], ('/api/extensions/github/requests/prepare',
+                    {'chatId': 'chat', 'requestId': 'turn', 'extensionId': 'example'}))
+                receipt['runtimeVerified'] = True
+                with self.assertRaises(manager.ManagerError):
+                    manager._prepare_request(env, server.server_port, json.dumps(binding_envelope).encode())
             receipt = {'schemaVersion': 1, 'kind': 'ods-extension-request-installation',
                        'chatId': 'chat', 'requestId': 'turn', 'extensionId': 'example',
                        'state': 'pending', 'activeExtensionId': 'example',
@@ -1303,7 +1318,7 @@ class RecipeValidationTests(unittest.TestCase):
                 with self.assertRaises(manager.ManagerError):
                     manager._request_json(port=server.server_port, credential='a' * 64, method='POST',
                                           path=path, timeout=2, body=body)
-            self.assertEqual(len(observed), 5)
+            self.assertEqual(len(observed), 7)
         finally:
             server.shutdown();server.server_close();worker.join(timeout=2)
 

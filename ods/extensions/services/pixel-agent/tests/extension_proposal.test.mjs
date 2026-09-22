@@ -50,7 +50,7 @@ for (const [factory, action] of [[createExtensionRequestStatusTool,'status'],
         kind:'ods-extension-request-scope',sessionHash,request};
       return {}; // Receipt validation remains independent of scope resolution.
     }});
-    assert.deepEqual(tool.parameters.properties,{});
+    assert.deepEqual(Object.keys(tool.parameters.properties),action==='prepare' ? ['extensionId'] : []);
     await tool.execute('turn',{});
     assert.deepEqual(calls,[{schemaVersion:1,action:'github-request-resolve',sessionHash},
       {schemaVersion:1,action:`github-request-${action}`,chatId:'chat',requestId:'original'}]);
@@ -198,6 +198,44 @@ test('surfaces only bounded value-free diagnostics for this exact request', asyn
     const result = await run({...diagnostic, ...changed});
     assert.doesNotMatch(result.content[0].text, /private-token|healthcheck-required/);
   }
+});
+
+test('existing integration selection resolves session scope and never claims runtime success', async () => {
+  const calls=[];
+  let value={schemaVersion:1,kind:'ods-extension-request-binding',chatId:'chat',requestId:'turn',
+    extensionId:'existing',definitionDigest:'a'.repeat(64),state:'bound',installationStarted:false,runtimeVerified:false};
+  const submit=async payload=>{
+    calls.push(payload);
+    return payload.action==='github-request-resolve'
+      ? {schemaVersion:1,kind:'ods-extension-request-scope',sessionHash:context.sessionKey.split('ods-')[1],request:{chatId:'chat',requestId:'turn'}}
+      : value;
+  };
+  const tool=createExtensionRequestPrepareTool(context,{submit});
+  assert.deepEqual((await tool.execute('id',{extensionId:'existing'})).details,value);
+  assert.deepEqual(calls[1],{schemaVersion:1,action:'github-request-prepare',chatId:'chat',requestId:'turn',extensionId:'existing'});
+  assert.deepEqual((await tool.execute('id',{})).details,value);
+  const original=value;
+  for(const change of [{extensionId:'different'},{requestId:'other'},{runtimeVerified:true},{installationStarted:true},{definitionDigest:'bad'}]) {
+    value={...original,...change};
+    assert.equal((await tool.execute('id',{extensionId:'existing'})).isError,true);
+  }
+  calls.length=0;
+  for(const input of [{extensionId:'../escape'},{extensionId:null},{extensionId:'existing',requestId:'injected'}]) {
+    assert.equal((await tool.execute('id',input)).isError,true);
+  }
+  assert.equal(calls.length,0);
+});
+
+test('status distinguishes an existing binding from a newly accepted proposal', async () => {
+  const value={schemaVersion:1,kind:'ods-extension-request-status',chatId:'chat',requestId:'turn',
+    requestState:'pending',proposalAccepted:false,integrationBound:true,prepared:true,
+    extensionId:'existing',existingExtensionIds:['existing'],runtimeStatus:'not_installed'};
+  const tool=createExtensionRequestStatusTool(context,{submit:async()=>value});
+  assert.deepEqual((await tool.execute('id',{chatId:'chat',requestId:'turn'})).details,value);
+  value.proposalAccepted=true;
+  assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).isError,true);
+  value.proposalAccepted=false;value.integrationBound=null;
+  assert.equal((await tool.execute('id',{chatId:'chat',requestId:'turn'})).isError,true);
 });
 
 test('repository conflicts retain existing IDs without suggesting a renamed duplicate', async () => {

@@ -90,7 +90,7 @@ def read_request(directory, owner, chat_id, request_id, *, now=None):
     owner_digest, identifier = _identity(owner, chat_id, request_id)
     record = _read(_directory(directory) / (identifier + '.json'))
     required = {'schemaVersion', 'ownerDigest', 'chatId', 'requestId', 'repository', 'createdAt', 'expiresAt', 'state'}
-    if (set(record) not in (required, required | {'proposal'})
+    if (set(record) not in (required, required | {'proposal'}, required | {'integration'})
             or record['schemaVersion'] != 1 or record['ownerDigest'] != owner_digest
             or record['chatId'] != chat_id or record['requestId'] != request_id
             or record['state'] not in {'pending', 'cancelled'}
@@ -109,9 +109,18 @@ def read_request(directory, owner, chat_id, request_id, *, now=None):
                    for key in ('draftId', 'recipeDigest'))
             or not isinstance(proposal['extensionId'], str) or not re.fullmatch('[a-z0-9][a-z0-9_-]{0,63}', proposal['extensionId'])):
         raise ValueError('Invalid bound proposal')
+    integration = record.get('integration')
+    if integration is not None and (not isinstance(integration, dict)
+            or set(integration) != {'extensionId', 'definitionDigest'}
+            or not isinstance(integration['extensionId'], str)
+            or not re.fullmatch('[a-z0-9][a-z0-9_-]{0,63}', integration['extensionId'])
+            or not isinstance(integration['definitionDigest'], str)
+            or not re.fullmatch('[a-f0-9]{64}', integration['definitionDigest'])):
+        raise ValueError('Invalid bound integration')
     return {'schemaVersion': 1, 'id': identifier, 'chatId': chat_id, 'requestId': request_id,
             'repository': record['repository'], 'state': state, 'expiresAt': record['expiresAt'],
-            'installationStarted': False, **({'proposal': proposal} if proposal is not None else {})}
+            'installationStarted': False, **({'proposal': proposal} if proposal is not None else {}),
+            **({'integration': integration} if integration is not None else {})}
 
 
 def active_chat_request(directory, owner, chat_id, *, now=None):
@@ -157,7 +166,7 @@ def bind_proposal(directory, owner, chat_id, request_id, candidate, validation, 
     current = read_request(directory, owner, chat_id, request_id, now=now)
     digest = hashlib.sha256(json.dumps(candidate, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
     repository = 'https://github.com/' + repository_identity(candidate.get('repository')).lower()
-    if (current['state'] != 'pending' or repository != current['repository']
+    if (current['state'] != 'pending' or current.get('integration') or repository != current['repository']
             or validation.get('valid') is not True or validation.get('recipeDigest') != digest
             or validation.get('errors') != [] or validation.get('existingExtensionIds') != []
             or draft.get('recipeDigest') != digest or draft.get('state') != 'draft'
@@ -176,6 +185,28 @@ def bind_proposal(directory, owner, chat_id, request_id, candidate, validation, 
     path = _directory(directory) / (current['id'] + '.json')
     record = _read(path)
     record['proposal'] = proposal
+    _write(path, record)
+    return read_request(directory, owner, chat_id, request_id, now=now)
+
+
+def bind_integration(directory, owner, chat_id, request_id, integration, *, now=None):
+    """Persist a caller-verified definition under the same request mutation lock."""
+    current = read_request(directory, owner, chat_id, request_id, now=now)
+    if current['state'] != 'pending' or current.get('proposal'):
+        raise ValueError('Request cannot bind an existing integration')
+    if (not isinstance(integration, dict) or set(integration) != {'extensionId', 'definitionDigest'}
+            or not isinstance(integration['extensionId'], str)
+            or not re.fullmatch('[a-z0-9][a-z0-9_-]{0,63}', integration['extensionId'])
+            or not isinstance(integration['definitionDigest'], str)
+            or not re.fullmatch('[a-f0-9]{64}', integration['definitionDigest'])):
+        raise ValueError('Invalid integration binding')
+    if current.get('integration'):
+        if current['integration'] != integration:
+            raise ValueError('Bound integration cannot change')
+        return current
+    path = _directory(directory) / (current['id'] + '.json')
+    record = _read(path)
+    record['integration'] = integration
     _write(path, record)
     return read_request(directory, owner, chat_id, request_id, now=now)
 

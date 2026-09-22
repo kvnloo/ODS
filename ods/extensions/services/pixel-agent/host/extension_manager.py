@@ -387,7 +387,10 @@ def _request_json(
             if not isinstance(body['sessionHash'], str) or not re.fullmatch(r'[a-f0-9]{64}', body['sessionHash']):
                 raise ManagerError('invalid request session hash')
         elif path in {'/api/extensions/github/requests/status', '/api/extensions/github/requests/prepare', '/api/extensions/github/requests/advance'}:
-            body = _exact_object(body, {'chatId', 'requestId'})
+            extra = {'extensionId'} if path.endswith('/prepare') and 'extensionId' in body else set()
+            body = _exact_object(body, {'chatId', 'requestId'} | extra)
+            if extra and (not isinstance(body['extensionId'], str) or not SERVICE_ID.fullmatch(body['extensionId'])):
+                raise ManagerError('invalid existing integration identity')
             if any(not isinstance(body[key], str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', body[key])
                    for key in ('chatId', 'requestId')):
                 raise ManagerError('invalid request-scoped status identity')
@@ -1050,17 +1053,32 @@ def _advance_request(env_path, port, payload):
 
 
 def _prepare_request(env_path, port, payload):
-    envelope = _exact_object(json.loads(payload.decode('utf-8')),
-        {'schemaVersion', 'action', 'chatId', 'requestId'})
+    envelope = json.loads(payload.decode('utf-8'))
+    extra = {'extensionId'} if isinstance(envelope, dict) and 'extensionId' in envelope else set()
+    envelope = _exact_object(envelope, {'schemaVersion', 'action', 'chatId', 'requestId'} | extra)
     if (len(payload) > MAX_FRAME_BYTES or envelope['schemaVersion'] != 1
             or envelope['action'] != 'github-request-prepare'
             or any(not isinstance(envelope[key], str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', envelope[key])
                    for key in ('chatId', 'requestId'))):
         raise ManagerError('invalid scoped preparation request')
+    if extra and (not isinstance(envelope['extensionId'], str) or not SERVICE_ID.fullmatch(envelope['extensionId'])):
+        raise ManagerError('invalid existing integration')
     credential = _read_env_key(_read_env(env_path), 'DASHBOARD_API_KEY')
     status, value = _request_json(port=port, credential=credential, method='POST',
         path='/api/extensions/github/requests/prepare', timeout=90,
-        body={key: envelope[key] for key in ('chatId', 'requestId')})
+        body={key: envelope[key] for key in ({'chatId', 'requestId'} | extra)})
+    if extra or isinstance(value, dict) and value.get('kind') == 'ods-extension-request-binding':
+        value = _exact_object(value, {'schemaVersion', 'kind', 'chatId', 'requestId',
+            'extensionId', 'definitionDigest', 'state', 'installationStarted', 'runtimeVerified'})
+        if (status != 200 or value['schemaVersion'] != 1 or value['kind'] != 'ods-extension-request-binding'
+                or any(value[key] != envelope[key] for key in ('chatId', 'requestId'))
+                or not isinstance(value['extensionId'], str) or not SERVICE_ID.fullmatch(value['extensionId'])
+                or (extra and value['extensionId'] != envelope['extensionId'])
+                or value['state'] != 'bound' or not isinstance(value['definitionDigest'], str)
+                or not HEX_KEY.fullmatch(value['definitionDigest'])
+                or value['installationStarted'] is not False or value['runtimeVerified'] is not False):
+            raise ManagerError('invalid integration binding receipt')
+        return value
     value = _exact_object(value, {'schemaVersion', 'kind', 'chatId', 'requestId', 'draftId',
         'extensionId', 'recipeDigest', 'state', 'installationStarted', 'registered', 'runtimeVerified'})
     if (status != 200 or value['schemaVersion'] != 1 or value['kind'] != 'ods-extension-request-preparation'
@@ -1085,7 +1103,7 @@ def _read_request_status(env_path, port, payload):
     status, value = _request_json(port=port, credential=credential, method='POST',
         path='/api/extensions/github/requests/status', timeout=25,
         body={key: envelope[key] for key in ('chatId', 'requestId')})
-    extra = {'existingExtensionIds'} if isinstance(value, dict) and 'existingExtensionIds' in value else set()
+    extra = {key for key in ('existingExtensionIds', 'integrationBound') if isinstance(value, dict) and key in value}
     value = _exact_object(value, {'schemaVersion', 'kind', 'chatId', 'requestId', 'requestState',
                                   'proposalAccepted', 'prepared', 'extensionId', 'runtimeStatus'} | extra)
     matches = value.get('existingExtensionIds', [])
@@ -1097,11 +1115,13 @@ def _read_request_status(env_path, port, payload):
             or any(value[key] != envelope[key] for key in ('chatId', 'requestId'))
             or value['requestState'] not in {'pending', 'cancelled', 'expired'}
             or any(type(value[key]) is not bool for key in ('proposalAccepted', 'prepared'))
+            or type(value.get('integrationBound', False)) is not bool
+            or (value.get('integrationBound', False) and value['proposalAccepted'])
             or (value['extensionId'] is not None and (not isinstance(value['extensionId'], str)
                 or not SERVICE_ID.fullmatch(value['extensionId'])))
             or value['runtimeStatus'] not in {'not_observed', 'enabled', 'cli_installed', 'disabled',
                 'stopped', 'not_installed', 'installing', 'setting_up', 'unhealthy', 'error', 'unavailable'}
-            or (value['prepared'] and (not value['proposalAccepted'] or not value['extensionId']))
+            or (value['prepared'] and (not (value['proposalAccepted'] or value.get('integrationBound', False)) or not value['extensionId']))
             or (value['runtimeStatus'] != 'not_observed' and not value['prepared'])):
         raise ManagerError('invalid scoped status receipt')
     return value

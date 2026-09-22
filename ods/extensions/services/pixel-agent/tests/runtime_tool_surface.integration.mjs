@@ -22,9 +22,11 @@ function run(tools, extra = {}) {
 test('working tools are direct while specialist tools remain in the real catalog', () => {
   const read = tool('read'), status = tool('pixel_ods_extension_request_status');
   const advance = tool('pixel_ods_extension_request_advance');
-  const result = run([read, status, advance]);
-  assert.deepEqual(result.tools, [...controls, read, status]);
-  assert.equal(result.catalogToolCount, 3);
+  const prepare = tool('pixel_ods_extension_request_prepare');
+  const specialist = tool('pixel_ods_extension_proposal');
+  const result = run([read, status, prepare, advance, specialist]);
+  assert.deepEqual(result.tools, [...controls, read, status, prepare, advance]);
+  assert.equal(result.catalogToolCount, 5);
   assert.equal(result.catalogRegistered, true);
   assert.ok(result.catalogRef.current);
 });

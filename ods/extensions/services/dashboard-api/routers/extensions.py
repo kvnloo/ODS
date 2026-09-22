@@ -1404,6 +1404,16 @@ def _advance_extension_installation(service_id: str, api_key: str, loop, request
         return advance_installation(read_plan, journal, _extension_operation_lock, dispatch, observe=observe)
 
 
+def _verify_bound_integration(current):
+    from extension_existing_binding import integration_identity
+    bound = current['integration']
+    actual = integration_identity(current['repository'], bound['extensionId'],
+                                  (USER_EXTENSIONS_DIR, EXTENSIONS_DIR, EXTENSIONS_LIBRARY_DIR))
+    if actual != bound or not any(row['id'] == bound['extensionId'] for row in _current_extension_catalog()):
+        raise ValueError('Bound integration changed or is unavailable')
+    return bound['extensionId']
+
+
 def _bound_prepared_request(owner, identity):
     """Resolve authority from the saved owner request, never model-supplied IDs."""
     from extension_requests import read_request
@@ -1414,6 +1424,8 @@ def _bound_prepared_request(owner, identity):
     with _extensions_lock():
         parent = _extensions_lock_path().parent.resolve()
         current = read_request(parent / '.extension-requests', owner, identity['chatId'], identity['requestId'])
+        if current['state'] == 'pending' and current.get('integration'):
+            return _verify_bound_integration(current)
         proposal = current.get('proposal')
         if current['state'] != 'pending' or not proposal:
             raise ValueError('No active extension proposal')
@@ -1494,6 +1506,18 @@ async def chat_extension_request_context(owner, chat_id, request_id, command, *,
         return None
     current, context = resolved
     revision = None
+    if current.get('integration'):
+        try:
+            observation = await asyncio.wait_for(_observe_extension_request(
+                {'chatId': current['chatId'], 'requestId': current['requestId']}, owner), timeout=16)
+            context['content'] += ('\nODS existing integration request state: ' + json.dumps(observation, sort_keys=True)
+                + '. This request reuses the saved integration; do not submit a duplicate proposal. '
+                'A binding is not installation success or new permission. Pending operations must be '
+                'observed rather than restarted. The current user message determines authorized work.')
+        except (HTTPException, OSError, ValueError, asyncio.TimeoutError):
+            context['content'] += ('\nThe existing integration binding could not be verified. Its outcome '
+                'is unknown; inspect the request rather than replacing it or starting another installation.')
+        return context
     if current.get('proposal'):
         from extension_recipe_drafts import read_draft
         from extension_recipe_package import recipe_digest
@@ -1629,6 +1653,7 @@ async def _observe_extension_request(payload, api_key):
                       **payload, 'requestState': current['state'],
                       'proposalAccepted': bool(current.get('proposal')), 'prepared': False,
                       'extensionId': None, 'runtimeStatus': 'not_observed'}
+            result['integrationBound'] = bool(current.get('integration'))
             # Matches are discovery evidence, not binding or execution authority.
             from extension_github import existing_recipes, repository_identity
             result['existingExtensionIds'] = []
@@ -1638,6 +1663,10 @@ async def _observe_extension_request(payload, api_key):
                     USER_EXTENSIONS_DIR, EXTENSIONS_DIR, EXTENSIONS_LIBRARY_DIR)
                 if len(result['existingExtensionIds']) > 64:
                     raise ValueError('Too many repository matches')
+            if current['state'] == 'pending' and current.get('integration'):
+                result['extensionId'] = _verify_bound_integration(current)
+                result['prepared'] = True
+                return result
             if not current.get('proposal') or current['state'] != 'pending':
                 return result
             bound = current['proposal']
@@ -1901,9 +1930,39 @@ async def extension_github_prepare_draft(draft_id: str, api_key: str = Depends(v
 async def extension_github_prepare_request(request: Request, api_key: str = Depends(verify_api_key)):
     from extension_requests import read_request
     payload = await _github_recipe_payload(request)
-    if not isinstance(payload, dict) or set(payload) != {'chatId', 'requestId'}:
+    if not isinstance(payload, dict) or set(payload) not in ({'chatId', 'requestId'}, {'chatId', 'requestId', 'extensionId'}):
         raise HTTPException(status_code=400, detail='Invalid extension request')
     directory = _extensions_lock_path().parent.resolve() / '.extension-requests'
+    from extension_existing_binding import integration_identity
+    from extension_requests import bind_integration
+    from extension_github import existing_recipes, repository_identity
+    def reuse():
+        with _extensions_lock():
+            current = read_request(directory, api_key, payload['chatId'], payload['requestId'])
+            if current['state'] != 'pending':
+                raise ValueError('Inactive request')
+            if current.get('proposal') and 'extensionId' not in payload:
+                return None  # The already accepted recipe remains authoritative.
+            roots = (USER_EXTENSIONS_DIR, EXTENSIONS_DIR, EXTENSIONS_LIBRARY_DIR)
+            selected = payload.get('extensionId', current.get('integration', {}).get('extensionId'))
+            if selected is None and 'extensionId' not in payload:
+                matches = existing_recipes(repository_identity(current['repository']), *roots)
+                if len(matches) != 1:
+                    raise ValueError('Select one observed existing integration or prepare an accepted proposal')
+                selected = matches[0]
+            identity = integration_identity(current['repository'], selected, roots)
+            if not any(row['id'] == selected for row in _current_extension_catalog()):
+                raise ValueError('Integration is not available in the catalog')
+            bound = bind_integration(directory, api_key, payload['chatId'], payload['requestId'], identity)
+            return {'schemaVersion': 1, 'kind': 'ods-extension-request-binding',
+                    **{key: payload[key] for key in ('chatId', 'requestId')}, **bound['integration'],
+                    'state': 'bound', 'installationStarted': False, 'runtimeVerified': False}
+    try:
+        receipt = await asyncio.to_thread(reuse)
+    except (ValueError, OSError, KeyError, TypeError, yaml.YAMLError):
+        raise HTTPException(status_code=409, detail='Preparation requires an accepted proposal or an unambiguous existing integration') from None
+    if receipt:
+        return JSONResponse(receipt, headers={'Cache-Control': 'no-store'})
     try:
         current = await asyncio.to_thread(read_request, directory, api_key, payload['chatId'], payload['requestId'])
         if current['state'] != 'pending' or not current.get('proposal'):
