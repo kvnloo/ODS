@@ -103,7 +103,11 @@ an HTML file, and published its preview. Browser interaction confirmed the
 counter changed from 0 to 1. This is local workflow evidence, not clean-install
 qualification or a claim of support for every Mac.
 
-The general macOS installer does not yet provision this native Pixel deployment.
+The general macOS installer now offers an initial native Pixel path through
+`install-macos.sh --pixel` (see "Initial main-installer entry point" below).
+It requires explicit license authorization and does not migrate, update, or
+resume an existing native Pixel installation. Installed-fleet qualification
+remains a separate gate; the preparation checks below do not prove it.
 `lib/pixel-native-bootstrap.py` now stages an owner-run OpenClaw runtime from
 an explicitly selected clean Pixel commit. It checks the pinned package URL,
 SHA256 and SHA512, requires native Apple Silicon Node at the release's minimum
