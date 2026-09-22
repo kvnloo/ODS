@@ -472,3 +472,12 @@ The live tool transcript also exposed two old publication recovery messages stil
 saying not to start a server. Aligned them with the new boundary: sandbox servers
 do not establish owner-accessible publication. No process permission or receipt
 validation was added by these messages.
+
+The JavaScript follow-up ended without verified syntax and triggered a preview
+creation fallback despite the existing published iframe. Fixed historical receipt
+retention across turns: a verified same-session snapshot remains historical evidence
+even when the next request is not classified as an edit of that artifact. It does
+not complete the new request or grant workspace scope. Regression coverage checks
+failure status plus the retained link, and no cross-session disclosure. The prompt
+classifier and semantic verification gaps remain; this fix does not assert that
+the failed verification itself succeeded.

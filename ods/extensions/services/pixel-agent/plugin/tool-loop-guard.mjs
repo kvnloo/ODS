@@ -8127,6 +8127,10 @@ export function createToolLoopGuard({
         const previousPreview = typeof sessionId === "string" && sessionId
           ? sessionPreviews.get(sessionId)
           : undefined;
+        // A failed verification in a later turn cannot erase an immutable
+        // publication from this session. This is historical evidence only;
+        // it neither verifies current files nor grants continuation scope.
+        if (previousPreview) state.workspaceLastVerifiedPreview ??= previousPreview;
         const namedPreviewRequested = requestsNamedSessionPreview(
           currentOwnerIntentText(event?.messages, event?.prompt), previousPreview
         );

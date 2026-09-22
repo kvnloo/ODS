@@ -15037,3 +15037,23 @@ test("preview testing servers retain process tracking without granting publicati
     assert.doesNotMatch(reply(guard).payload.text, /http:\/\/localhost/);
   }
 });
+
+
+test("later failed preview work retains only the same session's historical publication", () => {
+  for (const sessionId of ["session-1", "other-session"]) {
+    const guard = createToolLoopGuard();
+    const {details} = seedNamedPreview(guard);
+    guard.observeRun({agentId: "pixel", runId: "later-run", sessionId}, "pixel", {
+      prompt: "Build and publish another website in a new directory.",
+    });
+    const evidence = guard.verificationForRun("later-run");
+    assert.equal(evidence.status, "failed", "previous publication does not complete the new request");
+    if (sessionId === "session-1") {
+      assert.equal(evidence.preview.url, details.url);
+      assert.match(evidence.text, /last published preview/);
+      assert.doesNotMatch(evidence.text, /No localhost URL is live/);
+    } else {
+      assert.equal(evidence.preview, undefined, "never expose a different session's publication");
+    }
+  }
+});
