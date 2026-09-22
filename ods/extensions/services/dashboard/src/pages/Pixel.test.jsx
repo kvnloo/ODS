@@ -1264,7 +1264,10 @@ describe('Pixel', () => {
     expect(savedRecovery.messages[contextStart].content).toBe('old context')
     expect(screen.getByText('old answer')).toBeVisible()
 
+    // Text can render before the stream's final cleanup enables the composer.
+    await waitFor(() => expect(textarea).not.toBeDisabled())
     fireEvent.change(textarea, { target: { value: 'Continue from that verified result.' } })
+    await waitFor(() => expect(screen.getByTitle('Send')).not.toBeDisabled())
     fireEvent.click(screen.getByTitle('Send'))
     expect(await screen.findByText('Follow-up result')).toBeInTheDocument()
     const chatCalls = globalThis.fetch.mock.calls.filter(call => call[0] === '/api/pixel/chat/stream')
