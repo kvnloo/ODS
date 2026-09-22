@@ -1323,6 +1323,26 @@ class RecipeValidationTests(unittest.TestCase):
             server.shutdown();server.server_close();worker.join(timeout=2)
 
 
+    def test_preparation_rejection_preserves_only_verified_scope_and_reason(self):
+        from unittest.mock import patch
+        envelope = {'schemaVersion':1, 'action':'github-request-prepare', 'chatId':'chat', 'requestId':'turn'}
+        rejection = {'schemaVersion':1, 'kind':'ods-extension-request-preparation-rejected',
+                     'chatId':'chat', 'requestId':'turn', 'reason':'proposal_required', 'installationStarted':False}
+        with tempfile.TemporaryDirectory() as directory:
+            env = pathlib.Path(directory) / '.env'
+            env.write_text('DASHBOARD_API_KEY=' + 'a' * 64 + '\n'); env.chmod(0o600)
+            with patch.object(manager, '_request_json') as transport:
+                for reason in ('proposal_required', 'integration_selection_required'):
+                    value = {**rejection, 'reason':reason}
+                    transport.return_value = (409, {'detail':value})
+                    self.assertEqual(manager._prepare_request(env, 3002, json.dumps(envelope).encode()), value)
+                for change in ({'chatId':'other'}, {'requestId':'other'}, {'reason':'untrusted'},
+                               {'installationStarted':True}, {'installationStarted':0}, {'extra':'secret'}):
+                    transport.return_value = (409, {'detail':{**rejection, **change}})
+                    with self.assertRaises(manager.ManagerError):
+                        manager._prepare_request(env, 3002, json.dumps(envelope).encode())
+
+
 class CredentialProjectionTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

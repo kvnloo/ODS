@@ -346,3 +346,24 @@ test('repository matches are bounded discovery evidence, not a prepared installa
     }
   }
 });
+
+test('preparation rejections preserve scope and distinguish missing proposal from transport uncertainty', async () => {
+  const rejection={schemaVersion:1,kind:'ods-extension-request-preparation-rejected',
+    chatId:'chat',requestId:'turn',reason:'proposal_required',installationStarted:false};
+  let value=rejection;
+  const tool=createExtensionRequestPrepareTool(context,{submit:async()=>value});
+  for (const reason of ['proposal_required','integration_selection_required']) {
+    value={...rejection,reason};
+    const result=await tool.execute('prepare',{chatId:'chat',requestId:'turn'});
+    assert.equal(result.isError,true);
+    assert.deepEqual(JSON.parse(result.content[0].text),value);
+  }
+  for (const changed of [{chatId:'other'},{requestId:'other'},{reason:'secret error'},
+    {installationStarted:true},{installationStarted:0},{extra:'unexpected'}]) {
+    value={...rejection,...changed};
+    const result=await tool.execute('prepare',{chatId:'chat',requestId:'turn'});
+    assert.equal(result.isError,true);
+    assert.equal(result.details,undefined);
+    assert.match(result.content[0].text,/not confirmed/);
+  }
+});

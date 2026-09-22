@@ -1067,6 +1067,16 @@ def _prepare_request(env_path, port, payload):
     status, value = _request_json(port=port, credential=credential, method='POST',
         path='/api/extensions/github/requests/prepare', timeout=90,
         body={key: envelope[key] for key in ({'chatId', 'requestId'} | extra)})
+    if status == 409 and isinstance(value, dict) and set(value) == {'detail'}:
+        rejection = _exact_object(value['detail'], {'schemaVersion', 'kind', 'chatId',
+                                                  'requestId', 'reason', 'installationStarted'})
+        if (rejection['schemaVersion'] != 1
+                or rejection['kind'] != 'ods-extension-request-preparation-rejected'
+                or any(rejection[key] != envelope[key] for key in ('chatId', 'requestId'))
+                or rejection['reason'] not in ('proposal_required', 'integration_selection_required')
+                or rejection['installationStarted'] is not False):
+            raise ManagerError('invalid preparation rejection')
+        return rejection
     if extra or isinstance(value, dict) and value.get('kind') == 'ods-extension-request-binding':
         value = _exact_object(value, {'schemaVersion', 'kind', 'chatId', 'requestId',
             'extensionId', 'definitionDigest', 'state', 'installationStarted', 'runtimeVerified'})

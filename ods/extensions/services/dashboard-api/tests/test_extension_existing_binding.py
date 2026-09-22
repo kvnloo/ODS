@@ -134,11 +134,24 @@ def test_empty_prepare_resolves_only_one_existing_repository_match(existing):
     roots, package, directory, identity = existing
     duplicate = roots[2] / 'second'
     shutil.copytree(package, duplicate)
-    with pytest.raises(extensions.HTTPException):
+    with pytest.raises(extensions.HTTPException) as error:
         asyncio.run(extensions.extension_github_prepare_request(request(identity), api_key='owner'))
+    assert error.value.detail['reason'] == 'integration_selection_required'
     assert 'integration' not in read_request(directory, 'owner', 'chat', 'original')
     # Remove the competing repository association, retaining the other definition.
     (duplicate / 'upstream.json').write_text(json.dumps({'repository':'https://github.com/other/repo'}))
     result = asyncio.run(extensions.extension_github_prepare_request(request(identity), api_key='owner'))
     assert json.loads(result.body)['extensionId'] == 'example'
     assert json.loads(result.body)['installationStarted'] is False
+
+
+def test_missing_proposal_is_a_scoped_rejection_without_state_mutation(existing):
+    roots, package, directory, identity = existing
+    (package / 'upstream.json').write_text(json.dumps({'repository':'https://github.com/other/repo'}))
+    before = read_request(directory, 'owner', 'chat', 'original')
+    with pytest.raises(extensions.HTTPException) as error:
+        asyncio.run(extensions.extension_github_prepare_request(request(identity), api_key='owner'))
+    assert error.value.status_code == 409
+    assert error.value.detail == {'schemaVersion':1, 'kind':'ods-extension-request-preparation-rejected',
+                                 **identity, 'reason':'proposal_required', 'installationStarted':False}
+    assert read_request(directory, 'owner', 'chat', 'original') == before

@@ -1948,7 +1948,12 @@ async def extension_github_prepare_request(request: Request, api_key: str = Depe
             if selected is None and 'extensionId' not in payload:
                 matches = existing_recipes(repository_identity(current['repository']), *roots)
                 if len(matches) != 1:
-                    raise ValueError('Select one observed existing integration or prepare an accepted proposal')
+                    raise HTTPException(status_code=409, detail={
+                        'schemaVersion': 1, 'kind': 'ods-extension-request-preparation-rejected',
+                        **{key: payload[key] for key in ('chatId', 'requestId')},
+                        'reason': 'integration_selection_required' if matches else 'proposal_required',
+                        'installationStarted': False,
+                    })
                 selected = matches[0]
             identity = integration_identity(current['repository'], selected, roots)
             if not any(row['id'] == selected for row in _current_extension_catalog()):

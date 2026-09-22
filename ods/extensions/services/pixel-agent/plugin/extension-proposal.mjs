@@ -140,6 +140,13 @@ export function createExtensionRequestPrepareTool(context, {submit = submitExten
         args = await resolveRequestIdentity(context, args, submit);
         if (!args) return noActiveRequest();
         const value=await submit({schemaVersion:1,action:'github-request-prepare',...args,...(existing !== undefined ? {extensionId:existing} : {})});
+        if (value?.kind === 'ods-extension-request-preparation-rejected') {
+          if (!exact(value,['schemaVersion','kind','chatId','requestId','reason','installationStarted'])
+              || value.schemaVersion !== 1 || value.chatId !== args.chatId || value.requestId !== args.requestId
+              || !['proposal_required','integration_selection_required'].includes(value.reason)
+              || value.installationStarted !== false) return unavailable;
+          return {isError:true, content:[{type:'text',text:JSON.stringify(value)}], details:value};
+        }
         if (existing !== undefined || value?.kind === 'ods-extension-request-binding') {
           if (!exact(value,['schemaVersion','kind','chatId','requestId','extensionId','definitionDigest','state','installationStarted','runtimeVerified'])
               || value.schemaVersion!==1 || value.kind!=='ods-extension-request-binding'
