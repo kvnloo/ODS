@@ -9296,7 +9296,7 @@ export function createToolLoopGuard({
       return {
         stage: "workspace-preview-files",
         instruction:
-          "Do not reply yet. Deliver the visual project in Workbench: prepare a browser-ready version in one workspace-relative directory with index.html and its local CSS, JavaScript, SVG and image assets. Preserve the project source files. Raw JSX/TSX/Vue/Svelte source is not a browser preview: prepare the runnable output first and inspect its entry point. For a standalone visual asset, create an index.html that displays it. Do not start a server or claim an unverified preview. After index.html has been written or read in this response, call pixel_ods_workspace_preview with that relative directory.",
+          "Do not reply yet. Deliver the visual project in Workbench: prepare a browser-ready version in one workspace-relative directory with index.html and its local CSS, JavaScript, SVG and image assets. Preserve the project source files. Raw JSX/TSX/Vue/Svelte source is not a browser preview: prepare the runnable output first and inspect its entry point. For a standalone visual asset, create an index.html that displays it. A sandbox server is not an owner-accessible preview; do not claim an unverified URL. After index.html has been written or read in this response, call pixel_ods_workspace_preview with that relative directory.",
       };
     }
     state.workspacePreviewDirectory = directory;
@@ -9399,7 +9399,7 @@ export function createToolLoopGuard({
           "Finish all requested files, edits and checks first, then publish BEFORE your final answer. " +
           (directory ? `Call tool_call with id ${WORKSPACE_PREVIEW_TOOL} and args ${JSON.stringify({relativeDirectory:directory})}. ` :
             "Prepare a browser-ready directory with index.html and local assets, preserve the source files, then call pixel_ods_workspace_preview with that relativeDirectory. ") +
-          "Do not start a server. A saved file or a previous snapshot is not a verified current preview.";
+          "A sandbox server, saved file or previous snapshot is not a verified current preview.";
       }
       if (state?.workspacePreviewVerifiedDirectory && !state.workspacePreview &&
           state.workspacePreviewRequired && !state.workspacePreviewForbidden &&

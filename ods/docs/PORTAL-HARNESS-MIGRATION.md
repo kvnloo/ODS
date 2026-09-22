@@ -457,3 +457,18 @@ includes scoped process registration/status/logs/stop, authoritative terminal
 reconciliation across disconnects, and a controlled preview route to isolated
 servers. Dependency acquisition is still constrained by the sandbox's network-none
 configuration. Static-preview success must not be called Next.js qualification.
+
+Live static-site test: 4B/32768 session `8a97dc0c-615a-4a7d-adf0-11f81bba8a4d`
+ran `node --version`, created the directory, authored `Playground/clube-de-leitura/
+index.html`, and obtained a managed publication displayed inside Workbench. The
+rendered iframe shows the title, three books and theme button. This validates the
+previously blocked command-before-write path and actual static delivery.
+The model did not initially validate JavaScript: it attempted `node --check` on
+HTML and then printed a success sentence from `node -e`. That command is not
+verification evidence. A natural follow-up requested checking the real embedded
+source. Browser interactions and dynamic-server lifecycle remain unqualified.
+
+The live tool transcript also exposed two old publication recovery messages still
+saying not to start a server. Aligned them with the new boundary: sandbox servers
+do not establish owner-accessible publication. No process permission or receipt
+validation was added by these messages.
